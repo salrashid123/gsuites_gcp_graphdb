@@ -4,12 +4,12 @@ Sample procedure to import
 
 1. Gsuites Users-Groups
 2. Google Cloud IAM Policies (users,Roles,Resource)
-3. Google Cloud Projects 
+3. Google Cloud Projects
 
 into a JanusGraph Database.  
 
-This allows sysadmins to easily 'see' how users, groups are structured across cloud org domain and can surface access privleges not 
-readily visbile (i.e, group of groups, external service accounts).  Visualizing and having nested group structure also allows to easy see
+This allows sysadmins to easily 'see' how users, groups are structured across cloud org domain and can surface access privileges not
+readily visible (i.e, group of groups, external service accounts).  Visualizing and having nested group structure also allows to easy see
 relationships between projects/users/roles/serviceAccounts.
 
 For example, the following trivial section shows how a user has indirect access to a resource via nested groups:
@@ -19,9 +19,9 @@ Annotated flow that shows the links
 
 `user1@esodemoapp2`
 -  is a `memberOf` group `subgroup1@esodemoapp2`
--  -     is a `membeOf` group `group_of_groups1@`
--  -  -        which is has (`memberOf`) `roles/storage.objectViewer`
--  -  -  -          which is assigned to ```hasRole``` on project ```netapp-producer```
+-  -  is a `membeOf` group `group_of_groups1@`
+-  -  -  which is has ( `group_of_groups1@` ) `roles/storage.objectViewer`
+-  -  -  -  which is assigned to ```hasRole``` on project ```netapp-producer```
 
 - ![images/cytoscape_annotation.png](images/cytoscape_annotation.png)
 
@@ -30,7 +30,7 @@ SysAdmins can opionally query directly via `gremlin` command line for the same i
 
 > **WARNING:**  this is just a simple proof of concept: the script attached runs serially and the object hierarchy described below is very basic and likely incorrect!
 
-The intent here is to demonstrate how to load some sample data covering cloud org and gsuites structure into a  graphDB 
+The intent here is to demonstrate how to load some sample data covering cloud org and gsuites structure into a  graphDB
 
 ## Schema
 
@@ -38,34 +38,35 @@ The schema used in this sample is pretty basic and indexes a few properties acro
 
 -![image/IAM_UML.png](images/IAM_UML.png)
 
-### Users
-
-
-- Domain Users
+- Users
 ```python
   g.addV('user').property(label, 'user').property('uid', email).property('isExternal', False).id().next()
 ```
 
-- Non Domain Users
-
+- Groups
 ```python
-  g.addV('user').property(label, 'user').property('uid', email).property('isExternal', True).id().next()
+  g.addV('group').property(label, 'group').property('gid', group_email).property('isExternal', False).next()
 ```
 
-
-### Projects
+- Projects
 ```python
   g.addV('project').property(label, 'project').property('projectId', projectId).id().next()
 ```
 
+- Roles
+```python
+  g.addV('role').property(label, 'role').property('rolename', name).id().next()  
+```
+
+
 ## Setup
 
-THe stepup steps for this script primarily involves configuring a service account for both domain-wide-delegation and GCP cloud org access.
+The setup steps for this script primarily involves configuring a service account for both domain-wide-delegation and GCP cloud org access.
 
 
 ### Configure Service Account for Domain Wide Delegation
 
-1a. Create Service Account 
+1a. Create Service Account
 
 1b. Enable DWD
 
@@ -135,7 +136,7 @@ Run gremlin.sh to connect.
 - [gremlin-server](http://tinkerpop.apache.org/docs/current/reference/#gremlin-server)
 
 ```bash
-$ janusgraph-0.3.0-hadoop2/bin/gremlin.sh 
+$ janusgraph-0.3.0-hadoop2/bin/gremlin.sh
 
          \,,,/
          (o o)
@@ -145,7 +146,7 @@ plugin activated: janusgraph.imports
 plugin activated: tinkerpop.server
 plugin activated: tinkerpop.gephi
 plugin activated: tinkerpop.utilities
-gremlin> 
+gremlin>
 ```
 
 - Setup Gremlin local connection
@@ -171,16 +172,14 @@ Then make sure Janusgraph and gremlin are both running before running the script
 if its all configured, you should see an output like the one shown below.  Note, the script runs ``sequentially!!!``.  It will take a long time and is an **inconsistent snapshot**
 
 
-
-
-# References
+## References
 
 - [https://docs.janusgraph.org/latest/getting-started.html](https://docs.janusgraph.org/latest/getting-started.html)
 - [gremlin-server](http://tinkerpop.apache.org/docs/current/reference/#gremlin-server)
 - [https://github.com/bricaud/graphexp](https://github.com/bricaud/graphexp)
 - [https://medium.com/@BGuigal/janusgraph-python-9e8d6988c36c](https://medium.com/@BGuigal/janusgraph-python-9e8d6988c36c)
 - [https://github.com/apache/tinkerpop/tree/master/gremlin-python/](https://github.com/apache/tinkerpop/tree/master/gremlin-python/)
-
+- [https://www.compose.com/articles/graph-101-traversing-and-querying-janusgraph-using-gremlin/](https://www.compose.com/articles/graph-101-traversing-and-querying-janusgraph-using-gremlin/)
 
 ### Gremlin References
 
@@ -202,11 +201,21 @@ g.E().drop().iterate()
 Sample query to retrieve a user and its edges:
 
 ```bash
-gremlin> g.V().hasLabel('user').has('uid', 'user@esodemoapp2.com')
-==>v[495736]
 
-gremlin> g.V().hasLabel('user').has('uid', 'user@esodemoapp2.com').outE()
-==>e[5szz-amig-3yt-a9so][495736-memberOf->479256]
+gremlin> u1 = g.V().has("uid", "user1@esodemoapp2.com")
+==>v[2842792]
+
+gremlin> g.V().hasLabel('user').has('uid', 'user1@esodemoapp2.com').outE()
+==>e[zy8l-1oxig-3yt-1p3u0][2842792-memberOf->2850984]
+==>e[101ed-1oxig-3yt-1p6zs][2842792-memberOf->2855080]
+==>e[1045x-1oxig-3yt-53ea8][2842792-memberOf->8556560]
+==>e[zymt-1oxig-3yt-rwrvc][2842792-memberOf->46878744]
+
+gremlin> g.V().hasLabel('user').has('uid', 'user1@esodemoapp2.com').out().valueMap()
+==>{gid=[all_users_group@esodemoapp2.com], isExternal=[false]}
+==>{gid=[group_external_mixed1@esodemoapp2.com], isExternal=[false]}
+==>{gid=[subgroup1@esodemoapp2.com], isExternal=[false]}
+==>{gid=[group1_3@esodemoapp2.com], isExternal=[false]}
 ```
 
 ### Janus Schema Index
@@ -219,7 +228,7 @@ Via gremlin-console:
 :remote connect tinkerpop.server conf/remote.yaml session
 :remote console
 
-mgmt = graph.openManagement() 
+mgmt = graph.openManagement()
 user = mgmt.makeVertexLabel('user').make()
 group = mgmt.makeVertexLabel('group').make()
 
@@ -269,7 +278,7 @@ firefox index.html
 - ![images/graphexp.png](images/graphexp.png)
 
 
-#### Cytoscape 
+#### Cytoscape
 
 - Export graph to GraphML file:
 ```
@@ -318,38 +327,38 @@ The following is just a sampl raw JSON snippet for the various API calls made to
 ### User
 ```json
 {
-    "agreedToTerms": true, 
-    "archived": false, 
-    "changePasswordAtNextLogin": false, 
-    "creationTime": "2017-03-03T23:08:45.000Z", 
-    "customerId": "C023zw3x8", 
+    "agreedToTerms": true,
+    "archived": false,
+    "changePasswordAtNextLogin": false,
+    "creationTime": "2017-03-03T23:08:45.000Z",
+    "customerId": "C023zw3x8",
     "emails": [
         {
-            "address": "user1@esodemoapp2.com", 
+            "address": "user1@esodemoapp2.com",
             "primary": true
         }
-    ], 
-    "etag": "\"TN30oD80QTVK45AAxvl_wbzs4vs/BAzqYm49odJENQxY5BR65PFiveU\"", 
-    "id": "104497032270219758212", 
-    "includeInGlobalAddressList": true, 
-    "ipWhitelisted": false, 
-    "isAdmin": false, 
-    "isDelegatedAdmin": false, 
-    "isEnforcedIn2Sv": false, 
-    "isEnrolledIn2Sv": false, 
-    "isMailboxSetup": true, 
-    "kind": "admin#directory#user", 
-    "lastLoginTime": "2018-08-08T00:12:15.000Z", 
+    ],
+    "etag": "\"TN30oD80QTVK45AAxvl_wbzs4vs/BAzqYm49odJENQxY5BR65PFiveU\"",
+    "id": "104497032270219758212",
+    "includeInGlobalAddressList": true,
+    "ipWhitelisted": false,
+    "isAdmin": false,
+    "isDelegatedAdmin": false,
+    "isEnforcedIn2Sv": false,
+    "isEnrolledIn2Sv": false,
+    "isMailboxSetup": true,
+    "kind": "admin#directory#user",
+    "lastLoginTime": "2018-08-08T00:12:15.000Z",
     "name": {
-        "familyName": "user1", 
-        "fullName": "user1 user1", 
+        "familyName": "user1",
+        "fullName": "user1 user1",
         "givenName": "user1"
-    }, 
+    },
     "nonEditableAliases": [
         "user1@esodemoapp2.com.test-google-a.com"
-    ], 
-    "orgUnitPath": "/", 
-    "primaryEmail": "user1@esodemoapp2.com", 
+    ],
+    "orgUnitPath": "/",
+    "primaryEmail": "user1@esodemoapp2.com",
     "suspended": false
 }
 ```
@@ -358,14 +367,14 @@ The following is just a sampl raw JSON snippet for the various API calls made to
 
 ```json
         {
-            "adminCreated": true, 
-            "description": "", 
-            "directMembersCount": "2", 
-            "email": "group3@esodemoapp2.com", 
-            "etag": "\"TN30oD80QTVK45AAxvl_wbzs4vs/X-IafYaBZOxR2IyF9AlAQ_T_rrs\"", 
-            "id": "00haapch343tg2v", 
-            "kind": "admin#directory#group", 
-            "name": "group3", 
+            "adminCreated": true,
+            "description": "",
+            "directMembersCount": "2",
+            "email": "group3@esodemoapp2.com",
+            "etag": "\"TN30oD80QTVK45AAxvl_wbzs4vs/X-IafYaBZOxR2IyF9AlAQ_T_rrs\"",
+            "id": "00haapch343tg2v",
+            "kind": "admin#directory#group",
+            "name": "group3",
             "nonEditableAliases": [
                 "group3@esodemoapp2.com.test-google-a.com"
             ]
@@ -379,25 +388,25 @@ The following is just a sampl raw JSON snippet for the various API calls made to
 
 ```json
         {
-            "createTime": "2015-09-16T20:02:53.933Z", 
-            "lifecycleState": "ACTIVE", 
-            "name": "user2project2", 
+            "createTime": "2015-09-16T20:02:53.933Z",
+            "lifecycleState": "ACTIVE",
+            "name": "user2project2",
             "parent": {
-                "id": "827482733258", 
+                "id": "827482733258",
                 "type": "folder"
-            }, 
-            "projectId": "user2project2", 
+            },
+            "projectId": "user2project2",
             "projectNumber": "856208827206"
-        }, 
+        },
         {
-            "createTime": "2015-08-18T17:36:38.118Z", 
-            "lifecycleState": "ACTIVE", 
-            "name": "project1", 
+            "createTime": "2015-08-18T17:36:38.118Z",
+            "lifecycleState": "ACTIVE",
+            "name": "project1",
             "parent": {
-                "id": "673208786098", 
+                "id": "673208786098",
                 "type": "organization"
-            }, 
-            "projectId": "fabled-ray-104117", 
+            },
+            "projectId": "fabled-ray-104117",
             "projectNumber": "248066739582"
         }
 
@@ -408,21 +417,21 @@ The following is just a sampl raw JSON snippet for the various API calls made to
     "bindings": [
         {
             "members": [
-                "serviceAccount:856208827206-compute@developer.gserviceaccount.com", 
-                "serviceAccount:856208827206@cloudservices.gserviceaccount.com", 
+                "serviceAccount:856208827206-compute@developer.gserviceaccount.com",
+                "serviceAccount:856208827206@cloudservices.gserviceaccount.com",
                 "serviceAccount:user2project2@appspot.gserviceaccount.com"
-            ], 
+            ],
             "role": "roles/editor"
-        }, 
+        },
         {
             "members": [
-                "user:admin@esodemoapp2.com", 
+                "user:admin@esodemoapp2.com",
                 "user:user2@esodemoapp2.com"
-            ], 
+            ],
             "role": "roles/owner"
         }
-    ], 
-    "etag": "BwVscizSf/Q=", 
+    ],
+    "etag": "BwVscizSf/Q=",
     "version": 1
 }
 
@@ -433,12 +442,12 @@ The following is just a sampl raw JSON snippet for the various API calls made to
 ```json
     "accounts": [
         {
-            "displayName": "Compute Engine default service account", 
-            "email": "697770536017-compute@developer.gserviceaccount.com", 
-            "etag": "BwVpYHX+Ecs=", 
-            "name": "projects/your-vpn/serviceAccounts/697770536017-compute@developer.gserviceaccount.com", 
-            "oauth2ClientId": "111081231294235977990", 
-            "projectId": "your-vpn", 
+            "displayName": "Compute Engine default service account",
+            "email": "697770536017-compute@developer.gserviceaccount.com",
+            "etag": "BwVpYHX+Ecs=",
+            "name": "projects/your-vpn/serviceAccounts/697770536017-compute@developer.gserviceaccount.com",
+            "oauth2ClientId": "111081231294235977990",
+            "projectId": "your-vpn",
             "uniqueId": "111081231294235977990"
         }
     ]
@@ -451,19 +460,19 @@ The following is just a sampl raw JSON snippet for the various API calls made to
 {
     "roles": [
         {
-            "description": "Created on: 2018-08-13", 
-            "etag": "BwVzUMHQb3g=", 
-            "name": "projects/fabled-ray-104117/roles/CustomRole", 
+            "description": "Created on: 2018-08-13",
+            "etag": "BwVzUMHQb3g=",
+            "name": "projects/fabled-ray-104117/roles/CustomRole",
             "title": "Custom Role1"
         }
     ]
 }
 ```
 
-### Sample output 
+### Sample output
 
 ```bash
-======================= Users 
+======================= Users
   admin@esodemoapp2.com
   user10@esodemoapp2.com
   user1@esodemoapp2.com
@@ -475,7 +484,7 @@ The following is just a sampl raw JSON snippet for the various API calls made to
   user7@esodemoapp2.com
   user8@esodemoapp2.com
   user9@esodemoapp2.com
-======================= Groups 
+======================= Groups
   all_users_group@esodemoapp2.com
   group1_3@esodemoapp2.com
   group4_7@esodemoapp2.com
@@ -524,7 +533,7 @@ The following is just a sampl raw JSON snippet for the various API calls made to
      Adding user9@esodemoapp2.com --memberOf--> group_of_groups_1@esodemoapp2.com
 ======================= Group Members for group: subgroup1@esodemoapp2.com
 ======================= Group Members for group: subgroup2@esodemoapp2.com
-======================= Get Projects 
+======================= Get Projects
 ======================= ServiceAccounts for project your-vpn
      Adding ServiceAccount 697770536017-compute@developer.gserviceaccount.com
 ======================= CustomRoles for project your-vpn
