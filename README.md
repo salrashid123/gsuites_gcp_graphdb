@@ -53,6 +53,8 @@ The schema used in this sample is pretty basic and indexes a few properties acro
 
 -![image/IAM_UML.png](images/IAM_UML.png)
 
+> Note: the script and sample below does not cover cloud org, pubsub or GCE resource types.  It only iterates and covers projects
+
 - Users
 ```python
   g.addV('user').property(label, 'user').property('uid', email).property('isExternal', False).id().next()
