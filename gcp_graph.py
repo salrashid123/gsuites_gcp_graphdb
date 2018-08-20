@@ -73,7 +73,7 @@ def getGroupMembers(groupKey, service):
       if (groupType == 'CUSTOMER'):
         print "     GroupID: " + m['id'] + " Type: " + m['type']
         g1 = g.V().hasLabel('group').has('gid', groupKey).next()
-        print "     Adding " + 'ALL Users ' + " --memberOf--> " + groupKey        
+        print "     Adding " + 'ALL Users ' + " --memberOf--> " + groupKey
         e1 = g.V().addE('memberOf').to(g1).property('weight', 1).next()
       elif (groupType =='USER'):
         #print "     Member Email: " + m['email'] +  " Type: " + m['type']
@@ -84,16 +84,16 @@ def getGroupMembers(groupKey, service):
         try:
           g.V(u1).outE('memberOf').where(inV().hasId(g1.id)).next()
         except StopIteration:
-          print "     Adding " + m['email'] + " --memberOf--> " + groupKey   
+          print "     Adding " + m['email'] + " --memberOf--> " + groupKey
           e1 = g.V(u1).addE('memberOf').to(g1).property('weight', 1).next()
 
       elif (groupType =='GROUP'):
-        print "     GroupID: " + m['id'] + " GroupEmail: " + m['email'] + " Type: " + m['type'] 
+        print "     GroupID: " + m['id'] + " GroupEmail: " + m['email'] + " Type: " + m['type']
         g1 = g.V().hasLabel('group').has('gid', m['email'] ).next()
         g2 = g.V().hasLabel('group').has('gid', groupKey).next()
-        print "     Adding " + m['email'] + " --memberOf--> " + groupKey        
-        e1 = g.V(g1).addE('memberOf').to(g2).property('weight', 1).next()  
-        print '     >>> Recursion on '  + m['email']     
+        print "     Adding " + m['email'] + " --memberOf--> " + groupKey
+        e1 = g.V(g1).addE('memberOf').to(g2).property('weight', 1).next()
+        print '     >>> Recursion on '  + m['email']
         getGroupMembers(m['email'],service)
     #print json.dumps(results, sort_keys=True, indent=4)
     request = service.members().list_next(request, results)
@@ -109,8 +109,8 @@ def getGroups():
     for gr in groups:
       group_email = gr['email']
       print "  " + group_email
-      gid = gr['id']    
-      g.addV('group').property(label, 'group').property('gid', group_email).property('isExternal', False).id().next()    
+      gid = gr['id']
+      g.addV('group').property(label, 'group').property('gid', group_email).property('isExternal', False).id().next()
     request = directory_service.groups().list_next(request, results)
 
   request = ''
@@ -119,7 +119,7 @@ def getGroups():
     groups = results.get('groups', [])
     for gr in groups:
       group_email = gr['email']
-      gid = gr['id']    
+      gid = gr['id']
       getGroupMembers(group_email,directory_service)
     request = directory_service.groups().list_next(request, results)
 
@@ -139,9 +139,9 @@ def getUsers():
     request = directory_service.users().list_next(request, results)
 
 def getServiceAccounts(project_id):
-  print '======================= ServiceAccounts for project ' + project_id  
+  print '======================= ServiceAccounts for project ' + project_id
   request = ''
-  while request is not None:    
+  while request is not None:
     results = iam_service.projects().serviceAccounts().list(name='projects/' + project_id).execute()
     #print json.dumps(results, sort_keys=True, indent=4)
     serviceAccounts = results['accounts']
@@ -150,13 +150,13 @@ def getServiceAccounts(project_id):
       email = a['email']
       displayName = a['displayName']
       if ( len(  g.V().hasLabel('user').has('uid', email).toList() ) == 0 ):
-        print "     Adding ServiceAccount " + email   
+        print "     Adding ServiceAccount " + email
         g.addV('user').property(label, 'user').property('uid', email).property('isExternal', False).id().next()
-              
+
     request = iam_service.projects().serviceAccounts().list_next(request, results)
 
 def getIamPolicy(project_id):
-  print '======================= Iam Policy for project ' + project_id  
+  print '======================= Iam Policy for project ' + project_id
   results = crm_service.projects().getIamPolicy(resource=project_id).execute()
   #print json.dumps(results, sort_keys=True, indent=4)
   try:
@@ -168,8 +168,9 @@ def getIamPolicy(project_id):
 
       p1 = g.V().hasLabel('project').has('projectId', project_id).next()
       r1 = g.V().hasLabel('role').has('rolename', role).next()
+      print "     Adding " + project_id + " --hasRole--> " + role
       e1 = g.V(p1).addE('hasRole').to(r1).property('weight', 1).next()
-     
+
       members = binding['members']
       for member in members:
         member_type = member.split(':')[0]
@@ -179,33 +180,33 @@ def getIamPolicy(project_id):
 
         if (member_type == 'user'):
           if ( len( g.V().hasLabel('user').has('uid', email).toList() ) == 0 ):
-            g.addV('user').property(label, 'user').property('uid', email).property('isExternal', True).id().next()    
+            g.addV('user').property(label, 'user').property('uid', email).property('isExternal', True).id().next()
           i1 = g.V().hasLabel('user').has('uid', email).next()
 
         if (member_type == 'serviceAccount'):
           if ( len( g.V().hasLabel('user').has('uid', email).toList() ) == 0 ):
-            g.addV('user').property(label, 'user').property('uid', email).property('isExternal', True).id().next()    
+            g.addV('user').property(label, 'user').property('uid', email).property('isExternal', True).id().next()
           i1 = g.V().hasLabel('user').has('uid', email).next()
 
 
         if (member_type == 'group'):
           if ( len( g.V().hasLabel('group').has('gid', email).toList() ) == 0 ):
-            g.addV('group').property(label, 'group').property('gid', email).property('isExternal', True).id().next()    
+            g.addV('group').property(label, 'group').property('gid', email).property('isExternal', True).id().next()
           i1 = g.V().hasLabel('group').has('gid', email).next()
 
         try:
           g.V(r1).outE('hasMember').where(inV().hasId(i1.id)).next()
         except StopIteration:
-          print "     Adding " + role + " --hasMember--> " + email   
-          e1 = g.V(r1).addE('memberOf').to(i1).property('weight', 1).next()
+          print "     Adding " + role + " --hasMember--> " + email
+          e1 = g.V(r1).addE('hasMember').to(i1).property('weight', 1).next()
 
   except KeyError:
     pass
 
 def getCustomRoles(project_id):
-  print '======================= CustomRoles for project ' + project_id    
+  print '======================= CustomRoles for project ' + project_id
   request = ''
-  while request is not None:  
+  while request is not None:
     results = iam_service.projects().roles().list(parent='projects/' + project_id).execute()
     #print json.dumps(results, sort_keys=True, indent=4)
     try:
@@ -215,15 +216,15 @@ def getCustomRoles(project_id):
         print '     ' + name
         title = r['title']
         if ( len( g.V().hasLabel('role').has('rolename', name).toList() ) == 0 ):
-          g.addV('role').property(label, 'role').property('rolename', name).id().next()                
+          g.addV('role').property(label, 'role').property('rolename', name).id().next()
     except KeyError:
       pass
     request = iam_service.projects().roles().list_next(request, results)
 
 def getProjects():
-  print '======================= Get Projects '  
+  print '======================= Get Projects '
   request = ''
-  while request is not None:  
+  while request is not None:
     results = crm_service.projects().list().execute()
     #print json.dumps(results, sort_keys=True, indent=4)
     projects = results['projects']
@@ -231,9 +232,9 @@ def getProjects():
       projectNumber = p['projectNumber']
       projectId = p['projectId']
       if ( len(g.V().hasLabel('project').has('projectId', projectId).toList()) == 0 ):
-        g.addV('project').property(label, 'project').property('projectId', projectId).id().next()                      
-      getServiceAccounts(projectId)  
-      getCustomRoles(projectId)      
+        g.addV('project').property(label, 'project').property('projectId', projectId).id().next()
+      getServiceAccounts(projectId)
+      getCustomRoles(projectId)
       getIamPolicy(projectId)
     request = crm_service.projects().list_next(request, results)
 
