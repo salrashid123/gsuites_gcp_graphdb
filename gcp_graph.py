@@ -73,8 +73,8 @@ def getGroupMembers(groupKey, service):
       if (groupType == 'CUSTOMER'):
         print "     GroupID: " + m['id'] + " Type: " + m['type']
         g1 = g.V().hasLabel('group').has('gid', groupKey).next()
-        print "     Adding " + 'ALL Users ' + " --memberOf--> " + groupKey
-        e1 = g.V().addE('memberOf').to(g1).property('weight', 1).next()
+        print "     Adding " + 'ALL Users ' + " --in--> " + groupKey
+        e1 = g.V().addE('in').to(g1).property('weight', 1).next()
       elif (groupType =='USER'):
         #print "     Member Email: " + m['email'] +  " Type: " + m['type']
         if ( len( g.V().hasLabel('user').has('uid', m['email']).toList() ) == 0):
@@ -82,17 +82,17 @@ def getGroupMembers(groupKey, service):
         u1 = g.V().hasLabel('user').has('uid', m['email'] ).next()
         g1 = g.V().hasLabel('group').has('gid', groupKey).next()
         try:
-          g.V(u1).outE('memberOf').where(inV().hasId(g1.id)).next()
+          g.V(u1).outE('in').where(inV().hasId(g1.id)).next()
         except StopIteration:
-          print "     Adding " + m['email'] + " --memberOf--> " + groupKey
-          e1 = g.V(u1).addE('memberOf').to(g1).property('weight', 1).next()
+          print "     Adding " + m['email'] + " --in--> " + groupKey
+          e1 = g.V(u1).addE('in').to(g1).property('weight', 1).next()
 
       elif (groupType =='GROUP'):
         print "     GroupID: " + m['id'] + " GroupEmail: " + m['email'] + " Type: " + m['type']
         g1 = g.V().hasLabel('group').has('gid', m['email'] ).next()
         g2 = g.V().hasLabel('group').has('gid', groupKey).next()
-        print "     Adding " + m['email'] + " --memberOf--> " + groupKey
-        e1 = g.V(g1).addE('memberOf').to(g2).property('weight', 1).next()
+        print "     Adding " + m['email'] + " --in--> " + groupKey
+        e1 = g.V(g1).addE('in').to(g2).property('weight', 1).next()
         print '     >>> Recursion on '  + m['email']
         getGroupMembers(m['email'],service)
     #print json.dumps(results, sort_keys=True, indent=4)
@@ -168,8 +168,8 @@ def getIamPolicy(project_id):
 
       p1 = g.V().hasLabel('project').has('projectId', project_id).next()
       r1 = g.V().hasLabel('role').has('rolename', role).next()
-      print "     Adding " + project_id + " --hasRole--> " + role
-      e1 = g.V(p1).addE('hasRole').to(r1).property('weight', 1).next()
+      print "     Adding " + role + " --in--> " + project_id
+      e1 = g.V(r1).addE('in').to(p1).property('weight', 1).next()
 
       members = binding['members']
       for member in members:
@@ -195,10 +195,10 @@ def getIamPolicy(project_id):
           i1 = g.V().hasLabel('group').has('gid', email).next()
 
         try:
-          g.V(r1).outE('hasMember').where(inV().hasId(i1.id)).next()
+          g.V(r1).outE('in').where(inV().hasId(i1.id)).next()
         except StopIteration:
-          print "     Adding " + role + " --hasMember--> " + email
-          e1 = g.V(r1).addE('hasMember').to(i1).property('weight', 1).next()
+          print "     Adding " + email + " --in--> " + role
+          e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
 
   except KeyError:
     pass
