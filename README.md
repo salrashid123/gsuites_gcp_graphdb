@@ -25,10 +25,10 @@ user vertex `user1@`
 2. group vertex `subgroup1@` has edge `in` to group vertex `group_of_groups1@`
    (i.e. group of groups)
 
-3. group vertex `group_of_groups1@`  has edge `in` to role vertex `roles/storage.objectViewer`
+3. group vertex `group_of_groups1@`  has edge `in` to role vertex `roles/appengine.codeViewer`
    (i.e, this role includes a group)  
 
-4. Role vertex `roles/storage.objectViewer`  has edge `in` to resource vertex  `project`
+4. Role vertex `roles/appengine.codeViewer`  has edge `in` to resource vertex  `gcp-project-200601`
    (i.,e this resource/project has a role assigned to it)
 
 - ![images/cytoscape_annotation.png](images/cytoscape_annotation.png)
@@ -221,19 +221,20 @@ gremlin> u1 = g.V().has("uid", "user1@esodemoapp2.com")
 * Outbound Edges from a Vertex:
 ```
 gremlin> g.V().hasLabel('user').has('uid', 'user1@esodemoapp2.com').outE()
-==>e[zy8l-1oxig-3yt-1p3u0][2842792-memberOf->2850984]
-==>e[101ed-1oxig-3yt-1p6zs][2842792-memberOf->2855080]
-==>e[1045x-1oxig-3yt-53ea8][2842792-memberOf->8556560]
-==>e[zymt-1oxig-3yt-rwrvc][2842792-memberOf->46878744]
-
-gremlin> g.V().hasLabel('user').has('uid', 'user1@esodemoapp2.com').out().valueMap()
-==>{gid=[all_users_group@esodemoapp2.com], isExternal=[false]}
-==>{gid=[group_external_mixed1@esodemoapp2.com], isExternal=[false]}
-==>{gid=[subgroup1@esodemoapp2.com], isExternal=[false]}
-==>{gid=[group1_3@esodemoapp2.com], isExternal=[false]}
+==>e[1d0d-1eqw-4etx-iyw][65768-in->24584]
+==>e[1an1-1eqw-4etx-1o3s][65768-in->77896]
+==>e[1925-1eqw-4etx-1o88][65768-in->78056]
+==>e[1btp-1eqw-4etx-oej80][65768-in->40988880]
 ```
 
-
+* Connected Verticies from a Vertex:
+```
+gremlin> g.V().hasLabel('user').has('uid', 'user1@esodemoapp2.com').out().valueMap()
+==>{gid=[subgroup1@esodemoapp2.com], isExternal=[false]}
+==>{gid=[group1_3@esodemoapp2.com], isExternal=[false]}
+==>{gid=[all_users_group@esodemoapp2.com], isExternal=[false]}
+==>{gid=[group_external_mixed1@esodemoapp2.com], isExternal=[false]}
+```
 
 ### Janus Schema Index
 
@@ -251,7 +252,7 @@ group = mgmt.makeVertexLabel('group').make()
 
 uid = mgmt.makePropertyKey('uid').dataType(String.class).cardinality(org.janusgraph.core.Cardinality.SINGLE).make()
 gid = mgmt.makePropertyKey('gid').dataType(String.class).cardinality(org.janusgraph.core.Cardinality.SINGLE).make()
-memberOf = mgmt.makeEdgeLabel('memberOf').multiplicity(MULTI).make()
+memberOf = mgmt.makeEdgeLabel('in').multiplicity(MULTI).make()
 mgmt.commit()
 
 mgmt = graph.openManagement()
@@ -304,7 +305,6 @@ gremlin> sg = g.V().outE().subgraph('sg').cap('sg').next()
 
 gremlin> sg.io(IoCore.graphml()).writeGraph("/tmp/mygraph.xml")
 ==>null
-gremlin> 
 ```
 
 - Import GraphML to Cytoscape
