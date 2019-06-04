@@ -64,10 +64,10 @@ crm_service = build(serviceName='cloudresourcemanager', version= 'v1',http=gcp_h
 
 def getGroupMembers(groupKey, service):
   print '======================= Group Members for group: ' + groupKey
-  request = ''
+  request = directory_service.members().list(groupKey=groupKey)
   while request is not None:
     includeDerivedMembership = True
-    results = directory_service.members().list(groupKey=groupKey).execute()
+    results = request.execute()
     for m in results['members']:
       groupType = m['type']
       if (groupType == 'CUSTOMER'):
@@ -101,9 +101,9 @@ def getGroupMembers(groupKey, service):
 
 def getGroups():
   print '======================= Groups '
-  request = ''
+  request = directory_service.groups().list(customer=domain_id, domain=domain_name)
   while request is not None:
-    results = directory_service.groups().list(customer=domain_id, domain=domain_name).execute()
+    results = request.execute()
     groups = results.get('groups', [])
     #print json.dumps(results, sort_keys=True, indent=4)
     for gr in groups:
@@ -113,9 +113,9 @@ def getGroups():
       g.addV('group').property(label, 'group').property('gid', group_email).property('isExternal', False).id().next()
     request = directory_service.groups().list_next(request, results)
 
-  request = ''
+  request = directory_service.groups().list(customer=domain_id, domain=domain_name)
   while request is not None:
-    results = directory_service.groups().list(customer=domain_id, domain=domain_name).execute()
+    results = request.execute()
     groups = results.get('groups', [])
     for gr in groups:
       group_email = gr['email']
@@ -125,9 +125,9 @@ def getGroups():
 
 def getUsers():
   print '======================= Users '
-  request = ''
+  request = directory_service.users().list(customer=domain_id, domain=domain_name)
   while request is not None:
-    results = directory_service.users().list(customer=domain_id, domain=domain_name).execute()
+    results = request.execute()
     users = results.get('users', [])
     #print json.dumps(users, sort_keys=True, indent=4)
     for u in users:
@@ -140,9 +140,9 @@ def getUsers():
 
 def getServiceAccounts(project_id):
   print '======================= ServiceAccounts for project ' + project_id
-  request = ''
+  request = iam_service.projects().serviceAccounts().list(name='projects/' + project_id)
   while request is not None:
-    results = iam_service.projects().serviceAccounts().list(name='projects/' + project_id).execute()
+    results = request.execute()
     #print json.dumps(results, sort_keys=True, indent=4)
     serviceAccounts = results['accounts']
     for a in serviceAccounts:
@@ -205,9 +205,9 @@ def getIamPolicy(project_id):
 
 def getCustomRoles(project_id):
   print '======================= CustomRoles for project ' + project_id
-  request = ''
+  request = iam_service.projects().roles().list(parent='projects/' + project_id)
   while request is not None:
-    results = iam_service.projects().roles().list(parent='projects/' + project_id).execute()
+    results = request.execute()
     #print json.dumps(results, sort_keys=True, indent=4)
     try:
       roles = results['roles']
@@ -223,9 +223,9 @@ def getCustomRoles(project_id):
 
 def getProjects():
   print '======================= Get Projects '
-  request = ''
+  request = crm_service.projects().list()
   while request is not None:
-    results = crm_service.projects().list().execute()
+    results = request.execute()
     #print json.dumps(results, sort_keys=True, indent=4)
     projects = results['projects']
     for p in projects:
