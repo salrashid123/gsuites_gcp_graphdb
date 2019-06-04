@@ -68,35 +68,38 @@ def getGroupMembers(groupKey, service):
   while request is not None:
     includeDerivedMembership = True
     results = request.execute()
-    for m in results['members']:
-      groupType = m['type']
-      if (groupType == 'CUSTOMER'):
-        print "     GroupID: " + m['id'] + " Type: " + m['type']
-        g1 = g.V().hasLabel('group').has('gid', groupKey).next()
-        print "     Adding " + 'ALL Users ' + " --in--> " + groupKey
-        e1 = g.V().addE('in').to(g1).property('weight', 1).next()
-      elif (groupType =='USER'):
-        #print "     Member Email: " + m['email'] +  " Type: " + m['type']
-        if ( len( g.V().hasLabel('user').has('uid', m['email']).toList() ) == 0):
-          g.addV('user').property(label, 'user').property('uid', m['email'] ).property('isExternal', True).next()
-        u1 = g.V().hasLabel('user').has('uid', m['email'] ).next()
-        g1 = g.V().hasLabel('group').has('gid', groupKey).next()
-        try:
-          g.V(u1).outE('in').where(inV().hasId(g1.id)).next()
-        except StopIteration:
-          print "     Adding " + m['email'] + " --in--> " + groupKey
-          e1 = g.V(u1).addE('in').to(g1).property('weight', 1).next()
+    try:
+      for m in results['members']:
+        groupType = m['type']
+        if (groupType == 'CUSTOMER'):
+          print "     GroupID: " + m['id'] + " Type: " + m['type']
+          g1 = g.V().hasLabel('group').has('gid', groupKey).next()
+          print "     Adding " + 'ALL Users ' + " --in--> " + groupKey
+          e1 = g.V().addE('in').to(g1).property('weight', 1).next()
+        elif (groupType =='USER'):
+          #print "     Member Email: " + m['email'] +  " Type: " + m['type']
+          if ( len( g.V().hasLabel('user').has('uid', m['email']).toList() ) == 0):
+            g.addV('user').property(label, 'user').property('uid', m['email'] ).property('isExternal', True).next()
+          u1 = g.V().hasLabel('user').has('uid', m['email'] ).next()
+          g1 = g.V().hasLabel('group').has('gid', groupKey).next()
+          try:
+            g.V(u1).outE('in').where(inV().hasId(g1.id)).next()
+          except StopIteration:
+            print "     Adding " + m['email'] + " --in--> " + groupKey
+            e1 = g.V(u1).addE('in').to(g1).property('weight', 1).next()
 
-      elif (groupType =='GROUP'):
-        print "     GroupID: " + m['id'] + " GroupEmail: " + m['email'] + " Type: " + m['type']
-        g1 = g.V().hasLabel('group').has('gid', m['email'] ).next()
-        g2 = g.V().hasLabel('group').has('gid', groupKey).next()
-        print "     Adding " + m['email'] + " --in--> " + groupKey
-        e1 = g.V(g1).addE('in').to(g2).property('weight', 1).next()
-        print '     >>> Recursion on '  + m['email']
-        getGroupMembers(m['email'],service)
-    #print json.dumps(results, sort_keys=True, indent=4)
-    request = service.members().list_next(request, results)
+        elif (groupType =='GROUP'):
+          print "     GroupID: " + m['id'] + " GroupEmail: " + m['email'] + " Type: " + m['type']
+          g1 = g.V().hasLabel('group').has('gid', m['email'] ).next()
+          g2 = g.V().hasLabel('group').has('gid', groupKey).next()
+          print "     Adding " + m['email'] + " --in--> " + groupKey
+          e1 = g.V(g1).addE('in').to(g2).property('weight', 1).next()
+          print '     >>> Recursion on '  + m['email']
+          getGroupMembers(m['email'],service)
+      #print json.dumps(results, sort_keys=True, indent=4)
+    except KeyError:
+      pass
+    request = service.members().list_next(request, results)    
 
 
 def getGroups():
@@ -171,34 +174,37 @@ def getIamPolicy(project_id):
       print "     Adding " + role + " --in--> " + project_id
       e1 = g.V(r1).addE('in').to(p1).property('weight', 1).next()
 
-      members = binding['members']
-      for member in members:
-        member_type = member.split(':')[0]
-        email = member.split(':')[1]
+      try:
+        members = binding['members']
+        for member in members:
+          member_type = member.split(':')[0]
+          email = member.split(':')[1]
 
-        r1 = g.V().hasLabel('role').has('rolename', role).next()
+          r1 = g.V().hasLabel('role').has('rolename', role).next()
 
-        if (member_type == 'user'):
-          if ( len( g.V().hasLabel('user').has('uid', email).toList() ) == 0 ):
-            g.addV('user').property(label, 'user').property('uid', email).property('isExternal', True).id().next()
-          i1 = g.V().hasLabel('user').has('uid', email).next()
+          if (member_type == 'user'):
+            if ( len( g.V().hasLabel('user').has('uid', email).toList() ) == 0 ):
+              g.addV('user').property(label, 'user').property('uid', email).property('isExternal', True).id().next()
+            i1 = g.V().hasLabel('user').has('uid', email).next()
 
-        if (member_type == 'serviceAccount'):
-          if ( len( g.V().hasLabel('user').has('uid', email).toList() ) == 0 ):
-            g.addV('user').property(label, 'user').property('uid', email).property('isExternal', True).id().next()
-          i1 = g.V().hasLabel('user').has('uid', email).next()
+          if (member_type == 'serviceAccount'):
+            if ( len( g.V().hasLabel('user').has('uid', email).toList() ) == 0 ):
+              g.addV('user').property(label, 'user').property('uid', email).property('isExternal', True).id().next()
+            i1 = g.V().hasLabel('user').has('uid', email).next()
 
 
-        if (member_type == 'group'):
-          if ( len( g.V().hasLabel('group').has('gid', email).toList() ) == 0 ):
-            g.addV('group').property(label, 'group').property('gid', email).property('isExternal', True).id().next()
-          i1 = g.V().hasLabel('group').has('gid', email).next()
+          if (member_type == 'group'):
+            if ( len( g.V().hasLabel('group').has('gid', email).toList() ) == 0 ):
+              g.addV('group').property(label, 'group').property('gid', email).property('isExternal', True).id().next()
+            i1 = g.V().hasLabel('group').has('gid', email).next()
 
-        try:
-          g.V(r1).outE('in').where(inV().hasId(i1.id)).next()
-        except StopIteration:
-          print "     Adding " + email + " --in--> " + role
-          e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
+          try:
+            g.V(r1).outE('in').where(inV().hasId(i1.id)).next()
+          except StopIteration:
+            print "     Adding " + email + " --in--> " + role
+            e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
+      except KeyError:
+        pass    
 
   except KeyError:
     pass
