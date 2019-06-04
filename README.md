@@ -128,7 +128,7 @@ Set cloud ORG policies to apply from the root org node to all resources in the t
 ## Install JanusGraph
 
 - Local
-Download and untar [JanusGraph](http://janusgraph.org/)
+Download and untar [JanusGraph](http://janusgraph.org/).  I used version [janusgraph-0.3.0-hadoop2](https://github.com/JanusGraph/janusgraph/releases/tag/v0.3.0)
 
 * Start JanusGraph with defaults (Cassandra, ElasticSearch local)
 
@@ -178,6 +178,15 @@ First edit [gcp_graph.py][gcp_graph.py] and set:
 
 - customer_id
 - domain_name
+
+
+then install `python-virtualenv`
+
+```
+virtualenv env
+source env/bin/activate
+pip install -r requirements.txt
+```
 
 Then make sure Janusgraph and gremlin are both running before running the script.
 

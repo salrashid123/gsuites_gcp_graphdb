@@ -33,10 +33,10 @@ domain_id='C023zw3x8'
 domain_name = 'esodemoapp2.com'
 
 # for JSON_CERTIFICATE_FILES
-#os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "service+account.json"
+#os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "service_account.json"
 #credentials = GoogleCredentials.get_application_default()
 
-gsuites_credentials = ServiceAccountCredentials.from_json_keyfile_name('service_account.json')
+gsuites_credentials = ServiceAccountCredentials.from_json_keyfile_name('svc_account.json')
 gsuites_scopes = ['https://www.googleapis.com/auth/admin.directory.user.readonly', 'https://www.googleapis.com/auth/admin.directory.group.readonly']
 
 if gsuites_credentials.create_scoped_required():
@@ -48,7 +48,7 @@ gsuites_http = gsuites_credentials.authorize(gsuites_http)
 gsuites_credentials.refresh(gsuites_http)
 
 directory_service = discovery.build('admin', 'directory_v1', http=gsuites_http)
-gcp_credentials = ServiceAccountCredentials.from_json_keyfile_name('service_account.json')
+gcp_credentials = ServiceAccountCredentials.from_json_keyfile_name('svc_account.json')
 gcp_scopes = ['https://www.googleapis.com/auth/iam','https://www.googleapis.com/auth/cloud-platform']
 
 if gcp_credentials.create_scoped_required():
@@ -134,7 +134,7 @@ def getUsers():
       email =  u['primaryEmail']
       print '  ' + email
       uid = u['id']
-      customerId = u['customerId']
+      #customerId = u['customerId']
       g.addV('user').property(label, 'user').property('uid', email).property('isExternal', False).id().next()
     request = directory_service.users().list_next(request, results)
 
