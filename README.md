@@ -44,7 +44,9 @@ The intent here is to demonstrate how to load some sample data covering cloud or
 
 ## Schema
 
-The schema used in this sample is pretty basic and indexes a few properties across users, groups, serviceAccounts project, IAM roles, and resources.
+The schema used in this sample is pretty basic and indexes a few properties across users, groups, serviceAccounts project, IAM roles, and resources.  However, there is boilerplate snippet that demonstrates iterating other resource types.   For reference, see `func getGCS(ctx context.Context)`
+
+The code snippet contained there iterates projects and for each bucket in that project, extracts the IAM bindings and members.  The idea is to use that info to generate groovy snippets to emit to a file.
 
 -![image/IAM_UML.png](images/IAM_UML.png)
 
@@ -52,12 +54,17 @@ The schema used in this sample is pretty basic and indexes a few properties acro
 
 - Users
 ```python
-  g.addV('user').property(label, 'user').property('uid', email).property('isExternal', False).id().next()
+  g.addV('user').property(label, 'user').property('email', email).id().next()
+```
+
+- ServiceAccount
+```python
+  g.addV('serviceAccount').property(label, 'serviceAccount').property('email', email).id().next()
 ```
 
 - Groups
 ```python
-  g.addV('group').property(label, 'group').property('gid', group_email).property('isExternal', False).next()
+  g.addV('group').property(label, 'group').property('email', group_email).next()
 ```
 
 - Projects
@@ -123,7 +130,10 @@ Set cloud ORG policies to apply from the root org node to all resources in the t
 1f) Genrate and download a the service_account key
 
    - Make sure the project where you are generating the key has the following APIs enabled:
-   -  - `directory_v1`,  ```cloudresourcemanager```, `iam`
+
+    - [directory_v1](https://godoc.org/google.golang.org/api/admin/directory/v1)
+    - [iam](https://godoc.org/google.golang.org/api/iam/v1)
+    - [cloudresourcemanager](https://godoc.org/google.golang.org/api/cloudresourcemanager/v1beta1)
 
 ## Install JanusGraph
 
@@ -164,8 +174,8 @@ gremlin>
 - Setup Gremlin local connection
 
 ```
-gremlin> :remote connect tinkerpop.server conf/remote.yaml session
-gremlin> :remote console
+:remote connect tinkerpop.server conf/remote.yaml session
+:remote console
 ```
 
 At this point, local scripts on local will get sent to the running gremlin server
@@ -174,23 +184,37 @@ At this point, local scripts on local will get sent to the running gremlin serve
 
 ## Configure and Run ETL script
 
-First edit [gcp_graph.py][gcp_graph.py] and set:
+First edit [main.go][main.go] and set:
 
-- customer_id
-- domain_name
+- `serviceAccountFile`: path to the service account file
+- `subject`:  the email/identity of a gsuites domain admin to represent
+- `cx`: Gsuites customerID
 
-
-then install `python-virtualenv`
+then on a system with `go 1.11`, run
 
 ```
-virtualenv env
-source env/bin/activate
-pip install -r requirements.txt
+go run main.go
 ```
 
-Then make sure Janusgraph and gremlin are both running before running the script.
+The output of this run will generate several raw groovy files:
 
-if its all configured, you should see an output like the one shown below.  Note, the script runs ``sequentially!!!``.  It will take a long time and is an **inconsistent snapshot**
+- `users.groovy`:  users to add to the map
+- `groups.groovy`:  groups and groupmembers to add
+- `projects.groovy`:  list of the projects to add to the graph
+- `roles.groovy`:  Custom and possibly generic roles to add
+- `serviceaccounts.groovy`:  list of the service ac
+- `iam.groovy`:  IAM policy maps.
+
+
+Then make sure Janusgraph and gremlin are both running before loading each file.
+
+in the gremlin console, run
+
+```
+gremlin> :load  /path/to/groovyfile.groovy
+```
+
+if its all configured, you should see an output displaying the verticies and edges that were created.
 
 
 ## References
@@ -229,7 +253,7 @@ gremlin> u1 = g.V().has("uid", "user1@esodemoapp2.com")
 
 * Outbound Edges from a Vertex:
 ```
-gremlin> g.V().hasLabel('user').has('uid', 'user1@esodemoapp2.com').outE()
+gremlin> g.V().hasLabel('user').has('email', 'user1@esodemoapp2.com').outE()
 ==>e[1d0d-1eqw-4etx-iyw][65768-in->24584]
 ==>e[1an1-1eqw-4etx-1o3s][65768-in->77896]
 ==>e[1925-1eqw-4etx-1o88][65768-in->78056]
@@ -238,55 +262,12 @@ gremlin> g.V().hasLabel('user').has('uid', 'user1@esodemoapp2.com').outE()
 
 * Connected Verticies from a Vertex:
 ```
-gremlin> g.V().hasLabel('user').has('uid', 'user1@esodemoapp2.com').out().valueMap()
+gremlin> g.V().hasLabel('user').has('email', 'user1@esodemoapp2.com').out().valueMap()
 ==>{gid=[subgroup1@esodemoapp2.com], isExternal=[false]}
 ==>{gid=[group1_3@esodemoapp2.com], isExternal=[false]}
 ==>{gid=[all_users_group@esodemoapp2.com], isExternal=[false]}
 ==>{gid=[group_external_mixed1@esodemoapp2.com], isExternal=[false]}
 ```
-
-### Janus Schema Index
-
-If you need ot setup an Index on Janusgraph to speed up large graph traversal, the following setups a sample composite index:
-
-Via gremlin-console:
-
-```bash
-:remote connect tinkerpop.server conf/remote.yaml session
-:remote console
-
-mgmt = graph.openManagement()
-user = mgmt.makeVertexLabel('user').make()
-group = mgmt.makeVertexLabel('group').make()
-
-uid = mgmt.makePropertyKey('uid').dataType(String.class).cardinality(org.janusgraph.core.Cardinality.SINGLE).make()
-gid = mgmt.makePropertyKey('gid').dataType(String.class).cardinality(org.janusgraph.core.Cardinality.SINGLE).make()
-memberOf = mgmt.makeEdgeLabel('in').multiplicity(MULTI).make()
-mgmt.commit()
-
-mgmt = graph.openManagement()
-uid = mgmt.getPropertyKey('uid')
-mgmt.buildIndex("uidIndex", Vertex.class).addKey(uid).buildCompositeIndex()
-mgmt.commit();
-
-ManagementSystem.awaitGraphIndexStatus(graph, "uidIndex").status(SchemaStatus.REGISTERED).call();
-mgmt = graph.openManagement();
-index = mgmt.getGraphIndex("uidIndex");
-mgmt.updateIndex(index, SchemaAction.REINDEX);
-mgmt.commit();
-
-mgmt = graph.openManagement()
-uid = mgmt.getPropertyKey('uid')
-user = mgmt.getVertexLabel('user')
-mgmt.buildIndex('byUidAndLabel', Vertex.class).addKey(uid).indexOnly(user).buildCompositeIndex()
-mgmt.commit()
-
-ManagementSystem.awaitGraphIndexStatus(graph, 'byUidAndLabel').call()
-mgmt = graph.openManagement()
-mgmt.updateIndex(mgmt.getGraphIndex("byUidAndLabel"), SchemaAction.REINDEX).get()
-mgmt.commit()
-```
-
 
 ### Visualizing the Graph
 
@@ -339,7 +320,11 @@ gremlin> :remote list
 ```
 
 
+## Disconnected Graph
 
+While Google IAM Permissions are inherited down the tree from the Org and Folder, an API scan on a resource does not show those resources explictly.  What that means is once the script executes the scan of IAM permissions on a project at the project level, it does not recognize and link parent inherited owners or roles.  What that will mean is certain projects will be 'disconnected' from the main graph as shown here.  You can remedy this by adding in the domain admin account as an explicit `OWNER`:
+
+![images/iam_visiblity.png](images/iam_visiblity.png)
 
 ## Admin API
 
@@ -350,346 +335,3 @@ The following is just a sampl raw JSON snippet for the various API calls made to
 - https://cloud.google.com/resource-manager/reference/rest/
 - https://cloud.google.com/iam/reference/rest/v1/projects.roles/list
 - https://developers.google.com/admin-sdk/directory/v1/guides/authorizing
-
-
-### User
-```json
-{
-    "agreedToTerms": true,
-    "archived": false,
-    "changePasswordAtNextLogin": false,
-    "creationTime": "2017-03-03T23:08:45.000Z",
-    "customerId": "C023zw3x8",
-    "emails": [
-        {
-            "address": "user1@esodemoapp2.com",
-            "primary": true
-        }
-    ],
-    "etag": "\"TN30oD80QTVK45AAxvl_wbzs4vs/BAzqYm49odJENQxY5BR65PFiveU\"",
-    "id": "104497032270219758212",
-    "includeInGlobalAddressList": true,
-    "ipWhitelisted": false,
-    "isAdmin": false,
-    "isDelegatedAdmin": false,
-    "isEnforcedIn2Sv": false,
-    "isEnrolledIn2Sv": false,
-    "isMailboxSetup": true,
-    "kind": "admin#directory#user",
-    "lastLoginTime": "2018-08-08T00:12:15.000Z",
-    "name": {
-        "familyName": "user1",
-        "fullName": "user1 user1",
-        "givenName": "user1"
-    },
-    "nonEditableAliases": [
-        "user1@esodemoapp2.com.test-google-a.com"
-    ],
-    "orgUnitPath": "/",
-    "primaryEmail": "user1@esodemoapp2.com",
-    "suspended": false
-}
-```
-
-### Group
-
-```json
-        {
-            "adminCreated": true,
-            "description": "",
-            "directMembersCount": "2",
-            "email": "group3@esodemoapp2.com",
-            "etag": "\"TN30oD80QTVK45AAxvl_wbzs4vs/X-IafYaBZOxR2IyF9AlAQ_T_rrs\"",
-            "id": "00haapch343tg2v",
-            "kind": "admin#directory#group",
-            "name": "group3",
-            "nonEditableAliases": [
-                "group3@esodemoapp2.com.test-google-a.com"
-            ]
-        }
-```
-
-
-## IAM
-
-### projcts
-
-```json
-        {
-            "createTime": "2015-09-16T20:02:53.933Z",
-            "lifecycleState": "ACTIVE",
-            "name": "user2project2",
-            "parent": {
-                "id": "827482733258",
-                "type": "folder"
-            },
-            "projectId": "user2project2",
-            "projectNumber": "856208827206"
-        },
-        {
-            "createTime": "2015-08-18T17:36:38.118Z",
-            "lifecycleState": "ACTIVE",
-            "name": "project1",
-            "parent": {
-                "id": "673208786098",
-                "type": "organization"
-            },
-            "projectId": "fabled-ray-104117",
-            "projectNumber": "248066739582"
-        }
-
-```
-### IAM Bindings
-```json
-{
-    "bindings": [
-        {
-            "members": [
-                "serviceAccount:856208827206-compute@developer.gserviceaccount.com",
-                "serviceAccount:856208827206@cloudservices.gserviceaccount.com",
-                "serviceAccount:user2project2@appspot.gserviceaccount.com"
-            ],
-            "role": "roles/editor"
-        },
-        {
-            "members": [
-                "user:admin@esodemoapp2.com",
-                "user:user2@esodemoapp2.com"
-            ],
-            "role": "roles/owner"
-        }
-    ],
-    "etag": "BwVscizSf/Q=",
-    "version": 1
-}
-
-```
-
-### ServiceAccounts
-
-```json
-    "accounts": [
-        {
-            "displayName": "Compute Engine default service account",
-            "email": "697770536017-compute@developer.gserviceaccount.com",
-            "etag": "BwVpYHX+Ecs=",
-            "name": "projects/your-vpn/serviceAccounts/697770536017-compute@developer.gserviceaccount.com",
-            "oauth2ClientId": "111081231294235977990",
-            "projectId": "your-vpn",
-            "uniqueId": "111081231294235977990"
-        }
-    ]
-```
-### Roles
-
-- ![images/custom_role1.png](images/custom_role1.png)
-
-```json
-{
-    "roles": [
-        {
-            "description": "Created on: 2018-08-13",
-            "etag": "BwVzUMHQb3g=",
-            "name": "projects/fabled-ray-104117/roles/CustomRole",
-            "title": "Custom Role1"
-        }
-    ]
-}
-```
-
-### Sample output
-
-```bash
-======================= Users
-  admin@esodemoapp2.com
-  user10@esodemoapp2.com
-  user1@esodemoapp2.com
-  user2@esodemoapp2.com
-  user3@esodemoapp2.com
-  user4@esodemoapp2.com
-  user5@esodemoapp2.com
-  user6@esodemoapp2.com
-  user7@esodemoapp2.com
-  user8@esodemoapp2.com
-  user9@esodemoapp2.com
-======================= Groups
-  all_users_group@esodemoapp2.com
-  group1_3@esodemoapp2.com
-  group4_7@esodemoapp2.com
-  group8_10@esodemoapp2.com
-  group_external_mixed1@esodemoapp2.com
-  group_of_groups_1@esodemoapp2.com
-  subgroup1@esodemoapp2.com
-  subgroup2@esodemoapp2.com
-======================= Group Members for group: all_users_group@esodemoapp2.com
-     GroupID: C023zw3x8 Type: CUSTOMER
-     Adding ALL Users  --in--> all_users_group@esodemoapp2.com
-======================= Group Members for group: group1_3@esodemoapp2.com
-     Adding user1@esodemoapp2.com --in--> group1_3@esodemoapp2.com
-     Adding user2@esodemoapp2.com --in--> group1_3@esodemoapp2.com
-     Adding user3@esodemoapp2.com --in--> group1_3@esodemoapp2.com
-======================= Group Members for group: group4_7@esodemoapp2.com
-     Adding user4@esodemoapp2.com --in--> group4_7@esodemoapp2.com
-     Adding user5@esodemoapp2.com --in--> group4_7@esodemoapp2.com
-     Adding user6@esodemoapp2.com --in--> group4_7@esodemoapp2.com
-     Adding user7@esodemoapp2.com --in--> group4_7@esodemoapp2.com
-======================= Group Members for group: group8_10@esodemoapp2.com
-     Adding user10@esodemoapp2.com --in--> group8_10@esodemoapp2.com
-     Adding user8@esodemoapp2.com --in--> group8_10@esodemoapp2.com
-     Adding user9@esodemoapp2.com --in--> group8_10@esodemoapp2.com
-======================= Group Members for group: group_external_mixed1@esodemoapp2.com
-     Adding 697770536017@cloudservices.gserviceaccount.com --in--> group_external_mixed1@esodemoapp2.com
-     Adding gcspoctest@gmail.com --in--> group_external_mixed1@esodemoapp2.com
-     Adding user1@esodemoapp2.com --in--> group_external_mixed1@esodemoapp2.com
-     Adding user4@esodemoapp2.com --in--> group_external_mixed1@esodemoapp2.com
-     Adding user8@esodemoapp2.com --in--> group_external_mixed1@esodemoapp2.com
-======================= Group Members for group: group_of_groups_1@esodemoapp2.com
-     Adding firebase-adminsdk-rr3uj@netapp-producer.iam.gserviceaccount.com --in--> group_of_groups_1@esodemoapp2.com
-     GroupID: 04bvk7pj2tzqm85 GroupEmail: subgroup1@esodemoapp2.com Type: GROUP
-     Adding subgroup1@esodemoapp2.com --in--> group_of_groups_1@esodemoapp2.com
-     >>> Recursion on subgroup1@esodemoapp2.com
-======================= Group Members for group: subgroup1@esodemoapp2.com
-     Adding user1@esodemoapp2.com --in--> subgroup1@esodemoapp2.com
-     Adding user2@esodemoapp2.com --in--> subgroup1@esodemoapp2.com
-     GroupID: 01baon6m0tnp44o GroupEmail: subgroup2@esodemoapp2.com Type: GROUP
-     Adding subgroup2@esodemoapp2.com --in--> group_of_groups_1@esodemoapp2.com
-     >>> Recursion on subgroup2@esodemoapp2.com
-======================= Group Members for group: subgroup2@esodemoapp2.com
-     Adding salmaan@43eskaton.com --in--> subgroup2@esodemoapp2.com
-     Adding user3@esodemoapp2.com --in--> subgroup2@esodemoapp2.com
-     Adding user10@esodemoapp2.com --in--> group_of_groups_1@esodemoapp2.com
-     Adding user9@esodemoapp2.com --in--> group_of_groups_1@esodemoapp2.com
-======================= Group Members for group: subgroup1@esodemoapp2.com
-======================= Group Members for group: subgroup2@esodemoapp2.com
-======================= Get Projects
-======================= ServiceAccounts for project your-vpn
-     Adding ServiceAccount 697770536017-compute@developer.gserviceaccount.com
-======================= CustomRoles for project your-vpn
-======================= Iam Policy for project your-vpn
-     Adding roles/compute.serviceAgent --in--> your-vpn
-     Adding service-697770536017@compute-system.iam.gserviceaccount.com --in--> roles/compute.serviceAgent
-     Adding roles/editor --in--> your-vpn
-     Adding 697770536017-compute@developer.gserviceaccount.com --in--> roles/editor
-     Adding 697770536017@cloudservices.gserviceaccount.com --in--> roles/editor
-     Adding 697770536017-compute@developer.gserviceaccount.com --in--> roles/editor
-     Adding 697770536017@cloudservices.gserviceaccount.com --in--> roles/editor
-     Adding roles/owner --in--> your-vpn
-     Adding admin@esodemoapp2.com --in--> roles/owner
-======================= ServiceAccounts for project gcp-project-200601
-     Adding ServiceAccount 61032636744-compute@developer.gserviceaccount.com
-======================= CustomRoles for project gcp-project-200601
-======================= Iam Policy for project gcp-project-200601
-     Adding roles/appengine.codeViewer --in--> gcp-project-200601
-     Adding group_of_groups_1@esodemoapp2.com --in--> roles/appengine.codeViewer
-     Adding roles/editor --in--> gcp-project-200601
-     Adding 61032636744-compute@developer.gserviceaccount.com --in--> roles/editor
-     Adding 61032636744@cloudservices.gserviceaccount.com --in--> roles/editor
-     Adding roles/endpoints.portalAdmin --in--> gcp-project-200601
-     Adding restricted-compute-service-acc@mineral-minutia-820.iam.gserviceaccount.com --in--> roles/endpoints.portalAdmin
-     Adding roles/genomics.viewer --in--> gcp-project-200601
-     Adding user5@esodemoapp2.com --in--> roles/genomics.viewer
-     Adding roles/owner --in--> gcp-project-200601
-     Adding admin@esodemoapp2.com --in--> roles/owner
-     Adding roles/serviceusage.serviceUsageViewer --in--> gcp-project-200601
-     Adding group1_3@esodemoapp2.com --in--> roles/serviceusage.serviceUsageViewer
-     Adding roles/viewer --in--> gcp-project-200601
-     Adding gcspoctest@gmail.com --in--> roles/viewer
-======================= ServiceAccounts for project esp-demo-197318
-     Adding ServiceAccount publisher@esp-demo-197318.iam.gserviceaccount.com
-     Adding ServiceAccount subscriber@esp-demo-197318.iam.gserviceaccount.com
-======================= CustomRoles for project esp-demo-197318
-======================= Iam Policy for project esp-demo-197318
-     Adding roles/owner --in--> esp-demo-197318
-     Adding admin@esodemoapp2.com --in--> roles/owner
-======================= ServiceAccounts for project netapp-producer
-     Adding ServiceAccount netapp-producer@appspot.gserviceaccount.com
-     Adding ServiceAccount good-robot@netapp-producer.iam.gserviceaccount.com
-     Adding ServiceAccount metrics-robot@netapp-producer.iam.gserviceaccount.com
-     Adding ServiceAccount restricted-compute-service-acc@netapp-producer.iam.gserviceaccount.com
-     Adding ServiceAccount 479741685125-compute@developer.gserviceaccount.com
-======================= CustomRoles for project netapp-producer
-======================= Iam Policy for project netapp-producer
-     Adding roles/appengine.appViewer --in--> netapp-producer
-     Adding group_of_groups_1@esodemoapp2.com --in--> roles/appengine.appViewer
-     Adding roles/bigquery.user --in--> netapp-producer
-     Adding user5@esodemoapp2.com --in--> roles/bigquery.user
-     Adding roles/cloudfunctions.serviceAgent --in--> netapp-producer
-     Adding service-479741685125@gcf-admin-robot.iam.gserviceaccount.com --in--> roles/cloudfunctions.serviceAgent
-     Adding roles/compute.serviceAgent --in--> netapp-producer
-     Adding service-479741685125@compute-system.iam.gserviceaccount.com --in--> roles/compute.serviceAgent
-     Adding roles/container.admin --in--> netapp-producer
-     Adding service-479741685125@compute-system.iam.gserviceaccount.com --in--> roles/container.admin
-     Adding roles/container.serviceAgent --in--> netapp-producer
-     Adding service-479741685125@container-engine-robot.iam.gserviceaccount.com --in--> roles/container.serviceAgent
-     Adding roles/editor --in--> netapp-producer
-     Adding 479741685125@cloudservices.gserviceaccount.com --in--> roles/editor
-     Adding firebase-adminsdk-rr3uj@netapp-producer.iam.gserviceaccount.com --in--> roles/editor
-     Adding netapp-producer@appspot.gserviceaccount.com --in--> roles/editor
-     Adding service-479741685125@container-analysis.iam.gserviceaccount.com --in--> roles/editor
-     Adding service-479741685125@containerregistry.iam.gserviceaccount.com --in--> roles/editor
-     Adding roles/firebaserules.system --in--> netapp-producer
-     Adding service-479741685125@firebase-rules.iam.gserviceaccount.com --in--> roles/firebaserules.system
-     Adding roles/iap.httpsResourceAccessor --in--> netapp-producer
-     Adding admin@esodemoapp2.com --in--> roles/iap.httpsResourceAccessor
-     Adding roles/logging.logWriter --in--> netapp-producer
-     Adding 479741685125-compute@developer.gserviceaccount.com --in--> roles/logging.logWriter
-     Adding restricted-compute-service-acc@netapp-producer.iam.gserviceaccount.com --in--> roles/logging.logWriter
-     Adding roles/monitoring.metricWriter --in--> netapp-producer
-     Adding restricted-compute-service-acc@netapp-producer.iam.gserviceaccount.com --in--> roles/monitoring.metricWriter
-     Adding roles/owner --in--> netapp-producer
-     Adding admin@esodemoapp2.com --in--> roles/owner
-     Adding roles/storage.objectViewer --in--> netapp-producer
-     Adding group_of_groups_1@esodemoapp2.com --in--> roles/storage.objectViewer
-======================= ServiceAccounts for project user2project2
-     Adding ServiceAccount user2project2@appspot.gserviceaccount.com
-     Adding ServiceAccount 856208827206-compute@developer.gserviceaccount.com
-======================= CustomRoles for project user2project2
-======================= Iam Policy for project user2project2
-     Adding roles/clouddebugger.user --in--> user2project2
-     Adding group_external_mixed1@esodemoapp2.com --in--> roles/clouddebugger.user
-     Adding roles/editor --in--> user2project2
-     Adding 856208827206-compute@developer.gserviceaccount.com --in--> roles/editor
-     Adding 856208827206@cloudservices.gserviceaccount.com --in--> roles/editor
-     Adding roles/owner --in--> user2project2
-     Adding admin@esodemoapp2.com --in--> roles/owner
-     Adding user2@esodemoapp2.com --in--> roles/owner
-======================= ServiceAccounts for project fabled-ray-104117
-     Adding ServiceAccount adminapi@fabled-ray-104117.iam.gserviceaccount.com
-     Adding ServiceAccount fabled-ray-104117@appspot.gserviceaccount.com
-     Adding ServiceAccount 248066739582-compute@developer.gserviceaccount.com
-======================= CustomRoles for project fabled-ray-104117
-     projects/fabled-ray-104117/roles/CustomRole
-======================= Iam Policy for project fabled-ray-104117
-     Adding projects/fabled-ray-104117/roles/CustomRole --in--> fabled-ray-104117
-     Adding user9@esodemoapp2.com --in--> projects/fabled-ray-104117/roles/CustomRole
-     Adding roles/appengine.appViewer --in--> fabled-ray-104117
-     Adding restricted-compute-service-acc@mineral-minutia-820.iam.gserviceaccount.com --in--> roles/appengine.appViewer
-     Adding roles/bigquery.user --in--> fabled-ray-104117
-     Adding user7@esodemoapp2.com --in--> roles/bigquery.user
-     Adding roles/cloudfunctions.serviceAgent --in--> fabled-ray-104117
-     Adding service-248066739582@gcf-admin-robot.iam.gserviceaccount.com --in--> roles/cloudfunctions.serviceAgent
-     Adding roles/cloudprofiler.user --in--> fabled-ray-104117
-     Adding user9@esodemoapp2.com --in--> roles/cloudprofiler.user
-     Adding roles/cloudtrace.user --in--> fabled-ray-104117
-     Adding group8_10@esodemoapp2.com --in--> roles/cloudtrace.user
-     Adding roles/compute.imageUser --in--> fabled-ray-104117
-     Adding esodemoapp2.com --in--> roles/compute.imageUser
-     Adding roles/compute.serviceAgent --in--> fabled-ray-104117
-     Adding service-248066739582@compute-system.iam.gserviceaccount.com --in--> roles/compute.serviceAgent
-     Adding roles/container.serviceAgent --in--> fabled-ray-104117
-     Adding service-248066739582@container-engine-robot.iam.gserviceaccount.com --in--> roles/container.serviceAgent
-     Adding roles/dataflow.serviceAgent --in--> fabled-ray-104117
-     Adding service-248066739582@dataflow-service-producer-prod.iam.gserviceaccount.com --in--> roles/dataflow.serviceAgent
-     Adding roles/editor --in--> fabled-ray-104117
-     Adding 248066739582-compute@developer.gserviceaccount.com --in--> roles/editor
-     Adding 248066739582@cloudservices.gserviceaccount.com --in--> roles/editor
-     Adding adminapi@fabled-ray-104117.iam.gserviceaccount.com --in--> roles/editor
-     Adding fabled-ray-104117@appspot.gserviceaccount.com --in--> roles/editor
-     Adding service-248066739582@containerregistry.iam.gserviceaccount.com --in--> roles/editor
-     Adding roles/iap.httpsResourceAccessor --in--> fabled-ray-104117
-     Adding admin@esodemoapp2.com --in--> roles/iap.httpsResourceAccessor
-     Adding roles/ml.serviceAgent --in--> fabled-ray-104117
-     Adding service-248066739582@cloud-ml.google.com.iam.gserviceaccount.com --in--> roles/ml.serviceAgent
-     Adding roles/owner --in--> fabled-ray-104117
-     Adding admin@esodemoapp2.com --in--> roles/owner
-```

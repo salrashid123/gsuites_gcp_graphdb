@@ -1,6 +1,0 @@
-oauth2client
-requests
-google-api-python-client
-httplib2
-gremlinpython
-futures
