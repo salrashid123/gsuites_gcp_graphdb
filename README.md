@@ -193,7 +193,31 @@ First edit [main.go][main.go] and set:
 then on a system with `go 1.11`, run
 
 ```
-go run main.go
+go run main.go --logtostderr=1 -v 2
+```
+
+The parameters will iterate through all the gsuites user,groups as well as the projects and IAM memberships.
+
+If you want to see more details, you can use log level `4` as shown here:
+
+```
+ go run main.go --logtostderr=1 -v 4
+```
+
+(full `groovy` text output to stdout, use level `10`)
+
+If you want to iterate only a subcomponent, use the `--component` flag.   For example, if you just want to iterate users, run
+
+```
+ go run main.go --logtostderr=1 -v 4 --component users
+```
+
+```
+go run main.go --help
+  -component string
+    	component to load: choices, all|projectIAM|users|serviceaccounts|roles|groups (default "all")
+  -delay int
+    	delay in ms for each goroutine (default 100)
 ```
 
 The output of this run will generate several raw groovy files:

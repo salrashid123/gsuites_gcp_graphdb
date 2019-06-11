@@ -25,11 +25,11 @@ import (
 	"fmt"
 	"os"
 	"io/ioutil"
-	"log"
 	"sync"
 	"strings"
 	"time"
 
+	"github.com/golang/glog"
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/admin/directory/v1"
@@ -50,7 +50,7 @@ var (
 	cx = "C023zw3x8"
 
 	component = flag.String("component", "all", "component to load: choices, all|projectIAM|users|serviceaccounts|roles|groups")
-	delay = flag.Int("delay",0, "delay in ms for each goroutine")
+	delay = flag.Int("delay",100, "delay in ms for each goroutine")
 
   adminService *admin.Service
 	iamService *iam.Service
@@ -97,58 +97,60 @@ func applyGroovy(cmd string, srcFile string){
 		pmutex.Lock()
 		_, err := pfile.WriteString(cmd)
 		if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 		}
 		pmutex.Unlock()
 	case usersConfig:
 		umutex.Lock()
 		_, err := ufile.WriteString(cmd)
 		if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 		}
 		umutex.Unlock()
 	case iamConfig:
 		imutex.Lock()
 		_, err := ifile.WriteString(cmd)
 		if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 		}
 		imutex.Unlock()
 	case serviceAccountConfig:
 		smutex.Lock()
 		_, err := sfile.WriteString(cmd)
 		if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 		}
 		smutex.Unlock()
 	case rolesConfig:
 		rmutex.Lock()
 		_, err := rfile.WriteString(cmd)
 		if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 		}
 		rmutex.Unlock()
 	case groupsConfig:
 		gmutex.Lock()
 		_, err := gfile.WriteString(cmd)
 		if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 		}
 		gmutex.Unlock()
 	case gcsConfig:
 		gcsmutex.Lock()
 		_, err := gcsfile.WriteString(cmd)
 		if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 		}
 		gcsmutex.Unlock()									
 	}
 
-	//fmt.Println(cmd)
+	glog.V(10).Infoln(cmd)
+
 }
 
 func getUsers(ctx context.Context) {
 	defer wg.Done()
+	glog.V(2).Infoln(">>>>>>>>>>> Getting Users")
 
 	pageToken := ""
 	for {
@@ -158,10 +160,10 @@ func getUsers(ctx context.Context) {
 	  }
 	  r, err := q.Do()
 	  if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 	  }
 	  for _, u := range r.Users {
-
+      glog.V(4).Infoln("            Adding User: ", u.PrimaryEmail)
 			entry := `	
 			if (g.V().hasLabel('user').has('email','%s').hasNext() == false) {	  
 			  g.addV('user').property(label, 'user').property('email', '%s').property('isExternal', false).id().next()
@@ -180,6 +182,7 @@ func getUsers(ctx context.Context) {
 
 func getGroups(ctx context.Context) {
 	defer wg.Done()	
+	glog.V(2).Infoln(">>>>>>>>>>> Getting Groups")
 	
 	pageToken := ""
 	for {
@@ -189,9 +192,10 @@ func getGroups(ctx context.Context) {
 	  }
 	  r, err := q.Do()
 	  if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 	  }
 	  for _, g := range r.Groups {
+			glog.V(4).Infoln("            Adding Group: ", g.Email)
 			entry := `	
 			if (g.V().hasLabel('group').has('email','%s').hasNext() == false) {				  		  
 			  g.addV('group').property(label, 'group').property('email', '%s').property('isExternal', false).id().next()
@@ -214,6 +218,7 @@ func getGroups(ctx context.Context) {
 
 func getGroupMembers(ctx context.Context, memberKey string) {
 	defer wg2.Done()
+	glog.V(2).Infoln(">>>>>>>>>>> Getting GroupMembers for Gropup ", memberKey)
 	
 	pageToken := ""
 	for {
@@ -227,12 +232,13 @@ func getGroupMembers(ctx context.Context, memberKey string) {
 			if (err.Error() == "googleapi: Error 403: Not Authorized to access this resource/api, forbidden") {
 				// ok, so we've got a group we can't expand on...this means we don't own it...
 				// this is important and we should error log this pretty clearly
-				log.Printf("Group %s cannot be expanded for members;  Possibly a group outside of the Gsuites domain",memberKey )
+				glog.Infof("Group %s cannot be expanded for members;  Possibly a group outside of the Gsuites domain",memberKey )
 				return
 			}
-			log.Fatal(err)
+			glog.Fatal(err)
 		}
 	  for _, m := range r.Members {
+			glog.V(4).Infof("            Adding Member to Group %v : %v", memberKey, m.Email)
 			if (m.Type == "CUSTOMER") {
 				entry := `
 				if (g.V().hasLabel('group').has('email','%s').hasNext() == false) {
@@ -290,12 +296,14 @@ func getGroupMembers(ctx context.Context, memberKey string) {
 
 func getProjectServiceAccounts(ctx context.Context) {
 	defer wg.Done()
+	glog.V(2).Infoln(">>>>>>>>>>> Getting ProjectServiceAccounts")
 	
 	for _, p := range projects {
 		req := iamService.Projects.ServiceAccounts.List("projects/" + p.ProjectId)
 
 		if err := req.Pages(ctx, func(page *iam.ListServiceAccountsResponse) error {
 			for _, sa := range page.Accounts {
+				      glog.V(4).Infof("            Adding ServiceAccount: %v", sa.Email)
 							entry := `
 							if (g.V().hasLabel('serviceAccount').has('email','%s').hasNext() == false) {
 								g.addV('serviceAccount').property(label, 'serviceAccount').property('email', '%s').id().next()
@@ -307,21 +315,22 @@ func getProjectServiceAccounts(ctx context.Context) {
 			}
 			return nil
 		}); err != nil {
-				log.Fatal(err)
+				glog.Fatal(err)
 		}	
 	}
 }
 
 func getGCS(ctx context.Context) {
 	defer wg.Done()
+	glog.V(2).Infoln(">>>>>>>>>>> Getting GCS")
 
 	data, err := ioutil.ReadFile(serviceAccountFile)
 	if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 	}
 	client, err := storage.NewClient(ctx, option.WithCredentialsJSON(data))
 	if err != nil {
-					log.Fatalf("Failed to create client: %v", err)
+					glog.Fatalf("Failed to create client: %v", err)
 	}
 
 	for _, p := range projects {
@@ -338,9 +347,9 @@ func getGCS(ctx context.Context) {
 						break
 				}
 				if err != nil {
-						log.Fatalf("Unable to iterate bucket %s", b.Name)
+						glog.Fatalf("Unable to iterate bucket %s", b.Name)
 				}	
-
+        glog.V(4).Infof("            Adding Bucket %v from Project %v", b.Name, projectId)
 				entry := `
 				if (g.V().hasLabel('bucket').has('bucketname','%s').has('projectid','%s').hasNext() == false) {
 					g.addV('bucket').property(label, 'bucket').property('bucketname', '%s').property('projectid','%s').id().next()
@@ -358,10 +367,11 @@ func getGCS(ctx context.Context) {
 
 				policy, err := client.Bucket(b.Name).IAM().Policy(ctx)
 				if err != nil {
-					log.Printf("Unable to iterate bucket policy %s", b.Name)
+					glog.Infof("Unable to iterate bucket policy %s", b.Name)
 				} else {
 					for _, role := range policy.Roles() {
-									//log.Printf("        Role  %q", role)
+									//glog.Infof("        Role  %q", role)
+									glog.V(4).Infof("            Adding Role %v to Bucket %v", role, b.Name)
 									roleentry :=  `
 									if (g.V().hasLabel('role').has('rolename','%s').has('projectid','%s').hasNext() == false) {
 										g.addV('role').property(label, 'role').property('rolename', '%s').property('projectid','%s').id().next()
@@ -382,7 +392,7 @@ func getGCS(ctx context.Context) {
 
 										memberType := strings.Split(member,":")[0]
 										email := strings.Split(member,":")[1]
-
+										glog.V(4).Infof("            Adding Member %v to Bucket Role %v on Bucket %v", email, role, b.Name)
 										memberentry = memberentry + `																				
 										if (g.V().hasLabel('%s').has('email', '%s').hasNext()  == false) {
 											g.addV('%s').property(label, '%s').property('email', '%s').id().next()
@@ -410,7 +420,7 @@ func getGCS(ctx context.Context) {
 
 func getRoles(ctx context.Context) {
 	defer wg.Done()
-
+  glog.V(2).Infoln(">>>>>>>>>>> Getting Roles")
 	req := crmService.Projects.List()
 	if err := req.Pages(ctx, func(page *cloudresourcemanager.ListProjectsResponse) error {
 					for _, project := range page.Projects {
@@ -421,7 +431,8 @@ func getRoles(ctx context.Context) {
 							defer wg.Done()
 							req := iamService.Projects.Roles.List("projects/" + projectId)
 							if err := req.Pages(ctx, func(page *iam.ListRolesResponse) error {
-								for _, r := range page.Roles {						
+								for _, r := range page.Roles {
+									glog.V(4).Infof("            Adding Role %v from Project %v", r.Name, projectId)
 										entry := `
 										if (g.V().hasLabel('role').has('rolename','%s').has('projectid','%s').hasNext() == false) {
 											g.addV('role').property(label, 'role').property('rolename', '%s').property('projectid','%s').id().next()
@@ -432,28 +443,29 @@ func getRoles(ctx context.Context) {
 								}
 								return nil
 							}); err != nil {
-									log.Fatal(err)
+									glog.Fatal(err)
 							}	
 						}(ctx, project.ProjectId)
 
 					}
 					return nil
 	}); err != nil {
-					log.Fatal(err)
+					glog.Fatal(err)
 	}	
 }
 
 func getIamPolicy(ctx context.Context, projectID string) {
 	defer wg.Done()	
-
+  glog.V(2).Infof(">>>>>>>>>>> Getting IAMPolicy for Project %v", projectID)
 	rb := &cloudresourcemanager.GetIamPolicyRequest{}
 
 	resp, err := crmService.Projects.GetIamPolicy(projectID, rb).Context(ctx).Do()
 	if err != nil {
-		log.Fatal(err)
+		glog.Fatal(err)
 	}
 
 	for _, b := range resp.Bindings {
+		glog.V(4).Infof("            Adding Binding %v to from  Project %v", b.Role, projectID)
 		entry := `
 		if (g.V().hasLabel('role').has('rolename', '%s').has('projectid', '%s').hasNext()  == false) {
 			g.addV('role').property(label, 'role').property('rolename', '%s').property('projectid', '%s').id().next()
@@ -473,7 +485,7 @@ func getIamPolicy(ctx context.Context, projectID string) {
 		for _, m := range b.Members {
 		  memberType := strings.Split(m,":")[0]
 		  email := strings.Split(m,":")[1]
-
+      glog.V(4).Infof("            Adding Member %v to Role %v on Project %v", email, b.Role, projectID)
 		  if (memberType == "user") {
 
 			entry := `
@@ -527,7 +539,7 @@ func getIamPolicy(ctx context.Context, projectID string) {
 func getProjectIAM(ctx context.Context) {
 
 	defer wg.Done()
-
+  glog.V(2).Infof(">>>>>>>>>>> Getting ProjectIAM")
 	for _, p := range projects {
 		entry := `
 			if (g.V().hasLabel('project').has('projectId', '%s').hasNext() == false) {
@@ -544,7 +556,7 @@ func getProjectIAM(ctx context.Context) {
 }
 
 func getProjects(ctx context.Context) {
-
+  glog.V(2).Infof(">>>>>>>>>>> Getting Projects")
 	req := crmService.Projects.List()
 	if err := req.Pages(ctx, func(page *cloudresourcemanager.ListProjectsResponse) error {
 			for _, p := range page.Projects {
@@ -552,7 +564,7 @@ func getProjects(ctx context.Context) {
 			}
 			return nil
 	}); err != nil {
-					log.Fatal(err)
+					glog.Fatal(err)
 	}	
 }
 
@@ -562,7 +574,7 @@ func main() {
 
 	data, err := ioutil.ReadFile(serviceAccountFile)
 	if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 	}
 
 	adminconf, err := google.JWTConfigFromJSON(data,
@@ -572,29 +584,29 @@ func main() {
 
 	adminService, err = admin.New(adminconf.Client(ctx))
 	if err != nil {
-		log.Fatal(err)
+		glog.Fatal(err)
 	}
 
 	iamconf, err := google.JWTConfigFromJSON(data, iam.CloudPlatformScope)
 	if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 	}
 	iamclient := iamconf.Client(oauth2.NoContext)
 
 	iamService, err = iam.New(iamclient)
 	if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 	}
 
 	crmconf, err := google.JWTConfigFromJSON(data, cloudresourcemanager.CloudPlatformReadOnlyScope)
 	if err != nil {
-		log.Fatal(err)
+		glog.Fatal(err)
 	}
 	crmclient := crmconf.Client(oauth2.NoContext)
 
 	crmService, err = cloudresourcemanager.New(crmclient)
 	if err != nil {
-		log.Fatal(err)
+		glog.Fatal(err)
 	}
 
 
@@ -603,7 +615,9 @@ func main() {
 	switch *component {
 	case "projectIAM":
 		pfile, _ = os.Create(projectsConfig)
+		ifile, _ = os.Create(iamConfig)
 		defer pfile.Close()
+		defer ifile.Close()
 		wg.Add(1)
 		go getProjectIAM(ctx)	
 	case "users":
