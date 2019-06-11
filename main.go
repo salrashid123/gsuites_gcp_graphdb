@@ -28,6 +28,7 @@ import (
 	"log"
 	"sync"
 	"strings"
+	"time"
 
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2/google"
@@ -48,6 +49,8 @@ var (
 	subject = "admin@esodemoapp2.com"
 	cx = "C023zw3x8"
 
+	component = flag.String("component", "all", "component to load: choices, all|projectIAM|users|serviceaccounts|roles|groups")
+	delay = flag.Int("delay",0, "delay in ms for each goroutine")
 
   adminService *admin.Service
 	iamService *iam.Service
@@ -146,6 +149,7 @@ func applyGroovy(cmd string, srcFile string){
 
 func getUsers(ctx context.Context) {
 	defer wg.Done()
+	time.Sleep(time.Duration(*delay) * time.Millisecond)
 
 	pageToken := ""
 	for {
@@ -176,7 +180,8 @@ func getUsers(ctx context.Context) {
 
 func getGroups(ctx context.Context) {
 	defer wg.Done()	
-
+	time.Sleep(time.Duration(*delay) * time.Millisecond)
+	
 	pageToken := ""
 	for {
 	  q :=adminService.Groups.List().Customer(cx)
@@ -209,7 +214,8 @@ func getGroups(ctx context.Context) {
 
 func getGroupMembers(ctx context.Context, memberKey string) {
 	defer wg2.Done()
-
+	time.Sleep(time.Duration(*delay) * time.Millisecond)
+	
 	pageToken := ""
 	for {
 		
@@ -284,7 +290,8 @@ func getGroupMembers(ctx context.Context, memberKey string) {
 
 func getProjectServiceAccounts(ctx context.Context) {
 	defer wg.Done()
-
+	time.Sleep(time.Duration(*delay) * time.Millisecond)
+	
 	for _, p := range projects {
 		req := iamService.Projects.ServiceAccounts.List("projects/" + p.ProjectId)
 
@@ -307,6 +314,7 @@ func getProjectServiceAccounts(ctx context.Context) {
 
 func getGCS(ctx context.Context) {
 	defer wg.Done()
+	time.Sleep(time.Duration(*delay) * time.Millisecond)
 
 	data, err := ioutil.ReadFile(serviceAccountFile)
 	if err != nil {
@@ -322,6 +330,7 @@ func getGCS(ctx context.Context) {
 		wg.Add(1)
 		go func(ctx context.Context,  projectId string) {
 			defer wg.Done()
+			time.Sleep(time.Duration(*delay) * time.Millisecond)
 			it := client.Buckets(ctx, projectId)
 
 			for {
@@ -402,6 +411,7 @@ func getGCS(ctx context.Context) {
 
 func getRoles(ctx context.Context) {
 	defer wg.Done()
+	time.Sleep(time.Duration(*delay) * time.Millisecond)
 
 	req := crmService.Projects.List()
 	if err := req.Pages(ctx, func(page *cloudresourcemanager.ListProjectsResponse) error {
@@ -436,7 +446,8 @@ func getRoles(ctx context.Context) {
 
 func getIamPolicy(ctx context.Context, projectID string) {
 	defer wg.Done()	
-	
+	time.Sleep(time.Duration(*delay) * time.Millisecond)
+
 	rb := &cloudresourcemanager.GetIamPolicyRequest{}
 
 	resp, err := crmService.Projects.GetIamPolicy(projectID, rb).Context(ctx).Do()
@@ -518,6 +529,7 @@ func getIamPolicy(ctx context.Context, projectID string) {
 func getProjectIAM(ctx context.Context) {
 
 	defer wg.Done()
+	time.Sleep(time.Duration(*delay) * time.Millisecond)
 
 	for _, p := range projects {
 		entry := `
@@ -534,6 +546,8 @@ func getProjectIAM(ctx context.Context) {
 
 func getProjects(ctx context.Context) {
 
+	time.Sleep(time.Duration(*delay) * time.Millisecond)
+
 	req := crmService.Projects.List()
 	if err := req.Pages(ctx, func(page *cloudresourcemanager.ListProjectsResponse) error {
 			for _, p := range page.Projects {
@@ -547,8 +561,6 @@ func getProjects(ctx context.Context) {
 
 func main() {
 	ctx := context.Background()
-
-	component := flag.String("component", "all", "component to load: choices, all|projectIAM|users|serviceaccounts|roles|groups")
 	flag.Parse()
 
 	data, err := ioutil.ReadFile(serviceAccountFile)
