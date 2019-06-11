@@ -149,7 +149,6 @@ func applyGroovy(cmd string, srcFile string){
 
 func getUsers(ctx context.Context) {
 	defer wg.Done()
-	time.Sleep(time.Duration(*delay) * time.Millisecond)
 
 	pageToken := ""
 	for {
@@ -171,7 +170,8 @@ func getUsers(ctx context.Context) {
 		    entry = fmt.Sprintf(entry, u.PrimaryEmail,u.PrimaryEmail)
 		    applyGroovy(entry, usersConfig)				
 	  }
-	  pageToken = r.NextPageToken
+		pageToken = r.NextPageToken
+		time.Sleep(time.Duration(*delay) * time.Millisecond)
 	  if pageToken == "" {
 			break
 	  }
@@ -180,7 +180,6 @@ func getUsers(ctx context.Context) {
 
 func getGroups(ctx context.Context) {
 	defer wg.Done()	
-	time.Sleep(time.Duration(*delay) * time.Millisecond)
 	
 	pageToken := ""
 	for {
@@ -201,6 +200,7 @@ func getGroups(ctx context.Context) {
 		    entry = fmt.Sprintf(entry, g.Email, g.Email)
 		    applyGroovy(entry, groupsConfig)
 
+			time.Sleep(time.Duration(*delay) * time.Millisecond)
 			wg2.Add(1)
 			go getGroupMembers(ctx, g.Email)
 	  }
@@ -214,7 +214,6 @@ func getGroups(ctx context.Context) {
 
 func getGroupMembers(ctx context.Context, memberKey string) {
 	defer wg2.Done()
-	time.Sleep(time.Duration(*delay) * time.Millisecond)
 	
 	pageToken := ""
 	for {
@@ -277,6 +276,7 @@ func getGroupMembers(ctx context.Context, memberKey string) {
 				entry = fmt.Sprintf(entry, m.Email, m.Email, m.Email, memberKey)
 				applyGroovy(entry, groupsConfig)
 
+				time.Sleep(time.Duration(*delay) * time.Millisecond)
 				go getGroupMembers(ctx, m.Email)
 			}
 	  }
@@ -290,7 +290,6 @@ func getGroupMembers(ctx context.Context, memberKey string) {
 
 func getProjectServiceAccounts(ctx context.Context) {
 	defer wg.Done()
-	time.Sleep(time.Duration(*delay) * time.Millisecond)
 	
 	for _, p := range projects {
 		req := iamService.Projects.ServiceAccounts.List("projects/" + p.ProjectId)
@@ -303,7 +302,8 @@ func getProjectServiceAccounts(ctx context.Context) {
 							}
 							`		  
 							entry = fmt.Sprintf(entry, sa.Email, sa.Email)
-							applyGroovy(entry, serviceAccountConfig)						
+							applyGroovy(entry, serviceAccountConfig)
+							time.Sleep(time.Duration(*delay) * time.Millisecond)						
 			}
 			return nil
 		}); err != nil {
@@ -314,7 +314,6 @@ func getProjectServiceAccounts(ctx context.Context) {
 
 func getGCS(ctx context.Context) {
 	defer wg.Done()
-	time.Sleep(time.Duration(*delay) * time.Millisecond)
 
 	data, err := ioutil.ReadFile(serviceAccountFile)
 	if err != nil {
@@ -328,9 +327,9 @@ func getGCS(ctx context.Context) {
 	for _, p := range projects {
 
 		wg.Add(1)
+		time.Sleep(time.Duration(*delay) * time.Millisecond)
 		go func(ctx context.Context,  projectId string) {
 			defer wg.Done()
-			time.Sleep(time.Duration(*delay) * time.Millisecond)
 			it := client.Buckets(ctx, projectId)
 
 			for {
@@ -411,12 +410,12 @@ func getGCS(ctx context.Context) {
 
 func getRoles(ctx context.Context) {
 	defer wg.Done()
-	time.Sleep(time.Duration(*delay) * time.Millisecond)
 
 	req := crmService.Projects.List()
 	if err := req.Pages(ctx, func(page *cloudresourcemanager.ListProjectsResponse) error {
 					for _, project := range page.Projects {
-
+						
+						time.Sleep(time.Duration(*delay) * time.Millisecond)
 						wg.Add(1)
 						go func(ctx context.Context,  projectId string) {
 							defer wg.Done()
@@ -446,7 +445,6 @@ func getRoles(ctx context.Context) {
 
 func getIamPolicy(ctx context.Context, projectID string) {
 	defer wg.Done()	
-	time.Sleep(time.Duration(*delay) * time.Millisecond)
 
 	rb := &cloudresourcemanager.GetIamPolicyRequest{}
 
@@ -529,7 +527,6 @@ func getIamPolicy(ctx context.Context, projectID string) {
 func getProjectIAM(ctx context.Context) {
 
 	defer wg.Done()
-	time.Sleep(time.Duration(*delay) * time.Millisecond)
 
 	for _, p := range projects {
 		entry := `
@@ -539,14 +536,14 @@ func getProjectIAM(ctx context.Context) {
 		`		  
 		entry = fmt.Sprintf(entry, p.ProjectId, p.ProjectId)
 		applyGroovy(entry, projectsConfig)
+
+		time.Sleep(time.Duration(*delay) * time.Millisecond)
 		wg.Add(1)									
 		go getIamPolicy(ctx, p.ProjectId)
 	}
 }
 
 func getProjects(ctx context.Context) {
-
-	time.Sleep(time.Duration(*delay) * time.Millisecond)
 
 	req := crmService.Projects.List()
 	if err := req.Pages(ctx, func(page *cloudresourcemanager.ListProjectsResponse) error {
