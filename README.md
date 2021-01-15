@@ -100,6 +100,14 @@ The setup steps for this script primarily involves configuring a service account
 
 - ![images/admin_api_scope.png](images/admin_api_scope.png)
 
+```golang
+	// View users on your domain
+	AdminDirectoryUserReadonlyScope = "https://www.googleapis.com/auth/admin.directory.user.readonly"
+	// View groups on your domain
+	AdminDirectoryGroupReadonlyScope = "https://www.googleapis.com/auth/admin.directory.group.readonly"
+```
+
+For a list of scopes, see [Admin Directory API](`https://developers.google.com/identity/protocols/oauth2/scopes#admin-directory`)
 
 ### Identify Gsuites CustomerID
 
@@ -112,6 +120,14 @@ In my case its:
 "customerId": "C023zw3x8"
 ```
 
+alternatively,
+
+```
+$ gcloud organizations list
+DISPLAY_NAME               ID  DIRECTORY_CUSTOMER_ID
+esodemoapp2.com  673208786098              C023zw3x8
+
+```
 
 ### Configure Service Account for Cloud Org Access
 
@@ -140,9 +156,12 @@ Set cloud ORG policies to apply from the root org node to all resources in the t
 - Local
 Download and untar [JanusGraph](http://janusgraph.org/).  I used version [janusgraph-0.3.0-hadoop2](https://github.com/JanusGraph/janusgraph/releases/tag/v0.3.0)
 
-* Start JanusGraph with defaults (Cassandra, ElasticSearch local)
+* Start JanusGraph with defaults (Cassandra, ElasticSearch local)  
+  Note, you need [java8](https://docs.janusgraph.org/getting-started/installation/#local-installation)
 
 ```bash
+export JAVA_HOME=/path/to/jre1.8.0_211/
+
 $ janusgraph-0.3.0-hadoop2/bin/janusgraph.sh start
 Forking Cassandra...
 Running `nodetool statusthrift`.. OK (returned exit status 0 and printed string "running").
@@ -184,7 +203,7 @@ At this point, local scripts on local will get sent to the running gremlin serve
 
 ## Configure and Run ETL script
 
-First edit [main.go][main.go] and set:
+
 
 - `serviceAccountFile`: path to the service account file
 - `subject`:  the email/identity of a gsuites domain admin to represent
@@ -193,8 +212,15 @@ First edit [main.go][main.go] and set:
 then on a system with `go 1.11`, run
 
 ```
-go run main.go --logtostderr=1 -v 2
+go run main.go \
+  --serviceAccountFile=/path/to/svc_account.json \
+  --subject=admin@esodemoapp2.com \
+  --component=all \
+  --cx=C023zw3x8 \
+  --logtostderr=1 -v 20
 ```
+
+>>  NOTE: this utility will only sync ACTIVE projects
 
 The parameters will iterate through all the gsuites user,groups as well as the projects and IAM memberships.
 
@@ -212,13 +238,6 @@ If you want to iterate only a subcomponent, use the `--component` flag.   For ex
  go run main.go --logtostderr=1 -v 4 --component users
 ```
 
-```
-go run main.go --help
-  -component string
-    	component to load: choices, all|projectIAM|users|serviceaccounts|roles|groups (default "all")
-  -delay int
-    	delay in ms for each goroutine (default 100)
-```
 
 The output of this run will generate several raw groovy files:
 
@@ -230,15 +249,21 @@ The output of this run will generate several raw groovy files:
 - `iam.groovy`:  IAM policy maps.
 
 
+Combine all the files:
+
+```
+cat users.groovy serviceaccounts.groovy groups.groovy projects.groovy iam.groovy roles.groovy > all.groovy
+```
+
 Then make sure Janusgraph and gremlin are both running before loading each file.
 
 in the gremlin console, run
 
 ```
-gremlin> :load  /path/to/groovyfile.groovy
+gremlin> :load  /path/to/all.groovy
 ```
 
-if its all configured, you should see an output displaying the verticies and edges that were created.
+if its all configured, you should see an output displaying the vertices and edges that were created.
 
 
 ## References
@@ -252,7 +277,7 @@ if its all configured, you should see an output displaying the verticies and edg
 
 ### Gremlin References
 
-#### Drop All Verticies and Edges
+#### Drop All Vertices and Edges
 
 - On Gremlin Console
 ```bash
