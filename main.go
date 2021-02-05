@@ -36,6 +36,7 @@ import (
 	"golang.org/x/oauth2/google"
 	admin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/cloudresourcemanager/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iam/v1"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
@@ -50,6 +51,7 @@ var (
 	subject            = flag.String("subject", "admin@esodemoapp2.com", "Admin user to for the organization")
 	cx                 = flag.String("cx", "C023zw3x8", "Customer ID number for the Gsuites domain")
 	delay              = flag.Int("delay", 100, "delay in ms for each goroutine")
+	includePermissions = flag.Bool("includePermissions", false, "Include Permissions in Graph")
 
 	adminService *admin.Service
 	iamService   *iam.Service
@@ -86,7 +88,9 @@ var (
 	gcsfile   *os.File
 )
 
-const ()
+const (
+	maxPermissions = 100
+)
 
 func applyGroovy(cmd string, srcFile string) {
 
@@ -94,7 +98,7 @@ func applyGroovy(cmd string, srcFile string) {
 	case projectsConfig:
 		pmutex.Lock()
 		_, err := pfile.WriteString(cmd)
-		err = gfile.Sync()
+		err = pfile.Sync()
 		if err != nil {
 			glog.Fatal(err)
 		}
@@ -102,7 +106,7 @@ func applyGroovy(cmd string, srcFile string) {
 	case usersConfig:
 		umutex.Lock()
 		_, err := ufile.WriteString(cmd)
-		err = gfile.Sync()
+		err = ufile.Sync()
 		if err != nil {
 			glog.Fatal(err)
 		}
@@ -110,7 +114,7 @@ func applyGroovy(cmd string, srcFile string) {
 	case iamConfig:
 		imutex.Lock()
 		_, err := ifile.WriteString(cmd)
-		err = gfile.Sync()
+		err = ifile.Sync()
 		if err != nil {
 			glog.Fatal(err)
 		}
@@ -118,7 +122,7 @@ func applyGroovy(cmd string, srcFile string) {
 	case serviceAccountConfig:
 		smutex.Lock()
 		_, err := sfile.WriteString(cmd)
-		err = gfile.Sync()
+		err = sfile.Sync()
 		if err != nil {
 			glog.Fatal(err)
 		}
@@ -126,7 +130,7 @@ func applyGroovy(cmd string, srcFile string) {
 	case rolesConfig:
 		rmutex.Lock()
 		_, err := rfile.WriteString(cmd)
-		err = gfile.Sync()
+		err = rfile.Sync()
 		if err != nil {
 			glog.Fatal(err)
 		}
@@ -142,7 +146,7 @@ func applyGroovy(cmd string, srcFile string) {
 	case gcsConfig:
 		gcsmutex.Lock()
 		_, err := gcsfile.WriteString(cmd)
-		err = gfile.Sync()
+		err = gcsfile.Sync()
 		if err != nil {
 			glog.Fatal(err)
 		}
@@ -390,7 +394,7 @@ func getGCS(ctx context.Context) {
 				}						
 				`
 				entry = fmt.Sprintf(entry, b.Name, projectId, b.Name, projectId, b.Name, projectId, projectId, projectId, projectId)
-
+				rs := iam.NewRolesService(iamService)
 				policy, err := client.Bucket(b.Name).IAM().Policy(ctx)
 				if err != nil {
 					glog.Infof("Unable to iterate bucket policy %s", b.Name)
@@ -398,20 +402,54 @@ func getGCS(ctx context.Context) {
 					for _, role := range policy.Roles() {
 						//glog.Infof("        Role  %q", role)
 						glog.V(4).Infof("            Adding Role %v to Bucket %v", role, b.Name)
+
+						permissions := ""
+
+						if *includePermissions {
+							glog.V(4).Infof("            Getting GCS Permissions for Role %v from Project %v", role, projectId)
+							rc, err := rs.Get(string(role)).Do()
+							if err != nil {
+								if ee, ok := err.(*googleapi.Error); ok {
+									if ee.Code == 404 {
+										glog.V(4).Infof("            Ignoring 404 Error for  %v", role, projectId)
+									} else {
+										glog.Fatal(err)
+									}
+								}
+
+							} else {
+								permissions := ""
+								counter := 0
+								for _, perm := range rc.IncludedPermissions {
+									if counter > maxPermissions {
+										break
+									}
+									counter++
+
+									permissions = permissions + fmt.Sprintf(" v.property('permissions', '%s');", perm)
+								}
+							}
+						}
 						roleentry := `
 									if (g.V().hasLabel('role').has('rolename','%s').has('projectid','%s').hasNext() == false) {
-										g.addV('role').property(label, 'role').property('rolename', '%s').property('projectid','%s').id().next()
+
+										v = graph.addVertex('role')
+										v.property('rolename', '%s')
+										v.property('projectid', '%s')
+
+
+										%s
 									}
 									r1 = g.V().hasLabel('role').has('rolename', '%s').has('projectid','%s').next()
 									if ( g.V().hasLabel('bucket').has('bucketname', '%s').hasNext()  == false) {
-										g.addV('bucket').property(label, 'bucket').property('bucketname', '%s').property('projectid','%s').id().next()
+										g.addV('bucket').property(label, 'bucket').property('bucketname', '%s').property('projectid',%s).id().next()
 									}
 									p1 = g.V().hasLabel('bucket').has('bucketname', '%s').next()
 									if (g.V(r1).outE('in').where(inV().hasId( p1.id() )).hasNext() == false) {						
 										e1 = g.V(r1).addE('in').to(p1).property('weight', 1).next()	
 									}									
 									`
-						roleentry = fmt.Sprintf(roleentry, role, projectId, role, projectId, role, projectId, b.Name, b.Name, projectId, b.Name)
+						roleentry = fmt.Sprintf(roleentry, role, projectId, role, projectId, permissions, role, projectId, b.Name, b.Name, projectId, b.Name)
 						memberentry := ``
 
 						for _, member := range policy.Members(role) {
@@ -447,9 +485,13 @@ func getGCS(ctx context.Context) {
 func getRoles(ctx context.Context) {
 	defer wg.Done()
 	glog.V(2).Infoln(">>>>>>>>>>> Getting Roles")
+
 	req := crmService.Projects.List()
 	if err := req.Pages(ctx, func(page *cloudresourcemanager.ListProjectsResponse) error {
 		for _, project := range page.Projects {
+
+			rs := iam.NewRolesService(iamService)
+
 			if project.LifecycleState == "ACTIVE" {
 				time.Sleep(time.Duration(*delay) * time.Millisecond)
 				wg.Add(1)
@@ -458,14 +500,37 @@ func getRoles(ctx context.Context) {
 					req := iamService.Projects.Roles.List("projects/" + projectId)
 					if err := req.Pages(ctx, func(page *iam.ListRolesResponse) error {
 						for _, r := range page.Roles {
-							glog.V(4).Infof("            Adding Role %v from Project %v", r.Name, projectId)
+
+							permissions := ""
+							if *includePermissions {
+								glog.V(4).Infof("            Getting Permissions for Role %v from Project %v", r.Name, projectId)
+								rc, err := rs.Get(r.Name).Do()
+								if err != nil {
+									glog.Fatal(err)
+								}
+
+								counter := 0
+								for _, perm := range rc.IncludedPermissions {
+									if counter > maxPermissions {
+										break
+									}
+									counter++
+									permissions = permissions + fmt.Sprintf(" v.property('permissions', '%s');", perm)
+								}
+							}
 							entry := `
 										if (g.V().hasLabel('role').has('rolename','%s').has('projectid','%s').hasNext() == false) {
-											g.addV('role').property(label, 'role').property('rolename', '%s').property('projectid','%s').id().next()
+											v = graph.addVertex('role')
+											v.property('rolename', '%s')
+											v.property('projectid', '%s')
+	
+
+											%s
 										}
 										`
-							entry = fmt.Sprintf(entry, r.Name, projectId, r.Name, projectId)
+							entry = fmt.Sprintf(entry, r.Name, projectId, r.Name, projectId, permissions)
 							applyGroovy(entry, rolesConfig)
+
 						}
 						return nil
 					}); err != nil {
@@ -489,12 +554,35 @@ func getIamPolicy(ctx context.Context, projectID string) {
 	if err != nil {
 		glog.Fatal(err)
 	}
-
+	rs := iam.NewRolesService(iamService)
 	for _, b := range resp.Bindings {
 		glog.V(4).Infof("            Adding Binding %v to from  Project %v", b.Role, projectID)
+		permissions := ""
+		if *includePermissions {
+			glog.V(4).Infof("            Getting Permissions for Role %v from Project %v", b.Role, projectID)
+			rc, err := rs.Get(b.Role).Do()
+			if err != nil {
+				glog.Fatal(err)
+			}
+
+			counter := 0
+			for _, perm := range rc.IncludedPermissions {
+				if counter > maxPermissions {
+					break
+				}
+				counter++
+
+				permissions = permissions + fmt.Sprintf(" v.property('permissions', '%s');", perm)
+			}
+		}
 		entry := `
 		if (g.V().hasLabel('role').has('rolename', '%s').has('projectid', '%s').hasNext()  == false) {
-			g.addV('role').property(label, 'role').property('rolename', '%s').property('projectid', '%s').id().next()
+
+			v = graph.addVertex('role')
+			v.property('rolename', '%s')
+			v.property('projectid', '%s')
+
+			%s
 		}
 		r1 = g.V().hasLabel('role').has('rolename', '%s').has('projectid', '%s').next()
 		if ( g.V().hasLabel('project').has('projectid', '%s').hasNext()  == false) {
@@ -505,7 +593,7 @@ func getIamPolicy(ctx context.Context, projectID string) {
 			e1 = g.V(r1).addE('in').to(p1).property('weight', 1).next()	
 		}
 		`
-		entry = fmt.Sprintf(entry, b.Role, projectID, b.Role, projectID, b.Role, projectID, projectID, projectID, projectID)
+		entry = fmt.Sprintf(entry, b.Role, projectID, b.Role, projectID, permissions, b.Role, projectID, projectID, projectID, projectID)
 		applyGroovy(entry, iamConfig)
 
 		for _, m := range b.Members {

@@ -31,6 +31,12 @@ user vertex `user1@`
 4. Role vertex `roles/appengine.codeViewer`  has edge `in` to resource vertex  `gcp-project-200601`
    (i.,e this resource/project has a role assigned to it)
 
+5. Adding IAM Permissions to Role Vertices
+   
+   It would be useful to add the IAM permissions as multi-valued properties to each "Role" node
+   However, as of `2/5/21`, there are some issues i've come across in doing this that i've detailed at the end of the doc.
+
+
 - ![images/cytoscape_annotation.png](images/cytoscape_annotation.png)
 
 You are free to alter the `vertex->edge->vertex` relationship in anyway you want; i just picked this simple scheme for starters.
@@ -143,13 +149,13 @@ Set cloud ORG policies to apply from the root org node to all resources in the t
 - ![images/iam_role.png](images/iam_role.png)
 
 
-1f) Genrate and download a the service_account key
+1f) Generate and download a the service_account key
 
    - Make sure the project where you are generating the key has the following APIs enabled:
 
-    - [directory_v1](https://godoc.org/google.golang.org/api/admin/directory/v1)
-    - [iam](https://godoc.org/google.golang.org/api/iam/v1)
-    - [cloudresourcemanager](https://godoc.org/google.golang.org/api/cloudresourcemanager/v1beta1)
+*  [directory_v1](https://godoc.org/google.golang.org/api/admin/directory/v1)
+*  [iam](https://godoc.org/google.golang.org/api/iam/v1)
+*  [cloudresourcemanager](https://godoc.org/google.golang.org/api/cloudresourcemanager/v1beta1)
 
 ## Install JanusGraph
 
@@ -249,10 +255,21 @@ The output of this run will generate several raw groovy files:
 - `iam.groovy`:  IAM policy maps.
 
 
+Note, `init.groovy` generates the index and properties (used primarily to add permissions to roles):
+
+```groovy
+mgmt = graph.openManagement()
+p = mgmt.getPropertyKey("permissions")
+if (p == null) {
+    mgmt.makePropertyKey('permissions').dataType(String.class).cardinality(org.janusgraph.core.Cardinality.LIST).make()
+    mgmt.commit()
+}
+```
+
 Combine all the files:
 
-```
-cat users.groovy serviceaccounts.groovy groups.groovy projects.groovy iam.groovy roles.groovy > all.groovy
+```bash
+cat init.groovy users.groovy serviceaccounts.groovy groups.groovy projects.groovy iam.groovy roles.groovy > all.groovy
 ```
 
 Then make sure Janusgraph and gremlin are both running before loading each file.
@@ -309,7 +326,7 @@ gremlin> g.V().hasLabel('user').has('email', 'user1@esodemoapp2.com').outE()
 ==>e[1btp-1eqw-4etx-oej80][65768-in->40988880]
 ```
 
-* Connected Verticies from a Vertex:
+* Connected Vertices from a Vertex:
 ```
 gremlin> g.V().hasLabel('user').has('email', 'user1@esodemoapp2.com').out().valueMap()
 ==>{gid=[subgroup1@esodemoapp2.com], isExternal=[false]}
@@ -384,3 +401,72 @@ The following is just a sampl raw JSON snippet for the various API calls made to
 - https://cloud.google.com/resource-manager/reference/rest/
 - https://cloud.google.com/iam/reference/rest/v1/projects.roles/list
 - https://developers.google.com/admin-sdk/directory/v1/guides/authorizing
+
+
+
+## Permissions on Roles
+
+It would be quite useful to include IAM Permissions as multi-valued attributes to Roles.  
+
+To enable this feature, generate the `.groovy` files by specifying the ``--includePermissions` flag:
+
+```bash
+go run main.go  \
+   --serviceAccountFile=/path/to/google_apps_svc_dwd.json \
+   --subject=admin@esodemoapp2.com \
+   --includePermissions \
+   --component=all \
+   --cx=C023zw3x8 \
+   --logtostderr=1 -v 4 
+```
+
+That step will enumerate the IAM Permissions on a Role.  For example, the when the `roles/appengine.appViewer` vertex is defined, all of its constituent permissions are added:
+
+```groovy
+		if (g.V().hasLabel('role').has('rolename', 'roles/appengine.appViewer').has('projectid', 'netapp-producer').hasNext()  == false) {
+
+			v = graph.addVertex('role')
+			v.property('rolename', 'roles/appengine.appViewer')
+			v.property('projectid', 'netapp-producer')
+
+			 v.property('permissions', 'appengine.applications.get'); v.property('permissions', 'appengine.instances.get'); v.property('permissions', 'appengine.instances.list'); v.property('permissions', 'appengine.operations.get'); v.property('permissions', 'appengine.operations.list'); v.property('permissions', 'appengine.ser
+vices.get'); v.property('permissions', 'appengine.services.list'); v.property('permissions', 'appengine.versions.get'); v.property('permissions', 'appengine.versions.list'); v.property('permissions', 'resourcemanager.projects.get'); v.property('permissions', 'resourcemanager.projects.list');
+		}
+```
+
+We can do that since we defined the `permissions` property as a `LIST` in `init.groovy`:
+
+```groovy
+mgmt = graph.openManagement()
+p = mgmt.getPropertyKey("permissions")
+if (p == null) {
+    mgmt.makePropertyKey('permissions').dataType(String.class).cardinality(org.janusgraph.core.Cardinality.LIST).make()
+    mgmt.commit()
+}
+```
+
+Now the issues:
+
+1. The current application writes the groovy files to disk and imports it via the admin gremlin CLI.
+   This ofcourse isn't the right way to do this but i don't know this tech very well.
+   Loading a vary large permission set (which can number 1000s for things like `role/owner`) will cause a socket timeout in gremlin cli.
+   This is certainly a solvable problem but i haven't invested the time into this feature
+
+2. GraphML export format does not suport multi-valued properties.
+   Well...thats as far as i know...if you try to export the graph, you'll see
+
+   ```groovy
+   gremlin> sg.io(IoCore.graphml()).writeGraph("/tmp/mygraph.xml")
+        Multiple properties exist for the provided key, use Vertex.properties(permissions
+   ```
+
+   I do know you can GraphSON format does support it but i don't know of a utility that will render it
+
+```groovy
+    mapper = GraphSONMapper.build().addCustomModule(org.janusgraph.graphdb.tinkerpop.io.graphson.JanusGraphSONModuleV2d0.getInstance()).create()
+    writer = GraphSONWriter.build().mapper(mapper).create()
+    file = new FileOutputStream("/tmp/mygraph.json")
+    writer.writeGraph(file, sg)
+```
+
+However, if you don't care and just want to iterate over the graph using, gremlin itself, you dn't need to export the formats
