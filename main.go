@@ -442,7 +442,7 @@ func getGCS(ctx context.Context) {
 									}
 									r1 = g.V().hasLabel('role').has('rolename', '%s').has('projectid','%s').next()
 									if ( g.V().hasLabel('bucket').has('bucketname', '%s').hasNext()  == false) {
-										g.addV('bucket').property(label, 'bucket').property('bucketname', '%s').property('projectid',%s).id().next()
+										g.addV('bucket').property(label, 'bucket').property('bucketname', '%s').property('projectid','%s').id().next()
 									}
 									p1 = g.V().hasLabel('bucket').has('bucketname', '%s').next()
 									if (g.V(r1).outE('in').where(inV().hasId( p1.id() )).hasNext() == false) {						
@@ -453,6 +453,32 @@ func getGCS(ctx context.Context) {
 						memberentry := ``
 
 						for _, member := range policy.Members(role) {
+
+							if len(strings.Split(member, ":")) != 2 {
+								if member == "allUsers" || member == "allAuthenticatedUsers" {
+
+									glog.V(4).Infof("            Adding %s to Bucket Role %v on Bucket %v", member, role, b.Name)
+									memberType := "group"
+									email := member
+									memberentry = memberentry + `
+												if (g.V().hasLabel('%s').has('email', '%s').hasNext()  == false) {
+													g.addV('%s').property(label, '%s').property('email', '%s').id().next()
+												}
+												i1 = g.V().hasLabel('%s').has('email', '%s').next()
+												r1 = g.V().hasLabel('role').has('rolename', '%s').has('projectid', '%s').next()
+												if (g.V(i1).outE('in').where(inV().hasId(r1.id())).hasNext()  == false) {
+													e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
+												}
+												`
+
+									memberentry = fmt.Sprintf(memberentry, memberType, email, memberType, memberType, email, memberType, email, role, projectId)
+									break
+
+								} else {
+									glog.Error("            Unknown memberType  %v\n", member)
+									break
+								}
+							}
 
 							memberType := strings.Split(member, ":")[0]
 							email := strings.Split(member, ":")[1]
