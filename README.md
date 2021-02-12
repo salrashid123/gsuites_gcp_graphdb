@@ -91,29 +91,29 @@ The setup steps for this script primarily involves configuring a service account
 
 ### Configure Service Account for Domain Wide Delegation
 
-1a. Create Service Account
+1a. Create Service Account in Google Cloud Console (IAM & Admin > Service Accounts)
 
-1b. Enable DWD
+1b. Edit Service Account and Check "Enable G Suite Domain-wide Delegation"
 
-- ![images/admin_dwd.png](images/admin_dwd.png)
+![images/admin_dwd.png](images/admin_dwd.png)
 
 
 1c) Find Oauth2 Client ID:
 
  ```109909984808619572478```
 
-1d) Set Scopes
+1d) Create API Client in Google Workspace Admin Console (Security > API Controls > Domain-wide Delegation) 
+![images/admin_api_create.png](images/admin_api_create.png)
 
-- ![images/admin_api_scope.png](images/admin_api_scope.png)
-
-```golang
-	// View users on your domain
-	AdminDirectoryUserReadonlyScope = "https://www.googleapis.com/auth/admin.directory.user.readonly"
-	// View groups on your domain
-	AdminDirectoryGroupReadonlyScope = "https://www.googleapis.com/auth/admin.directory.group.readonly"
-```
+Specify the following OAuth scopes which gives access to view users and groups in your domain respectively:
+* `https://www.googleapis.com/auth/admin.directory.user.readonly`
+* `https://www.googleapis.com/auth/admin.directory.group.readonly`
 
 For a list of scopes, see [Admin Directory API](`https://developers.google.com/identity/protocols/oauth2/scopes#admin-directory`)
+
+Confirm Client ID scopes by clicking 'View details':
+
+- ![images/admin_api_scope.png](images/admin_api_scope.png)
 
 ### Identify Gsuites CustomerID
 
@@ -140,13 +140,13 @@ esodemoapp2.com  673208786098              C023zw3x8
 
 Set cloud ORG policies to apply from the root org node to all resources in the tree:
 
-1e) Org-wide Access:
+1e) Provide Service Account Org-wide Access in Cloud Console (IAM & Admin > IAM)
 
 * Security Reviewer
 * Editor
 
 
-- ![images/iam_role.png](images/iam_role.png)
+![images/iam_role.png](images/iam_role.png)
 
 
 1f) Generate and download a the service_account key
@@ -156,6 +156,7 @@ Set cloud ORG policies to apply from the root org node to all resources in the t
 *  [directory_v1](https://godoc.org/google.golang.org/api/admin/directory/v1)
 *  [iam](https://godoc.org/google.golang.org/api/iam/v1)
 *  [cloudresourcemanager](https://godoc.org/google.golang.org/api/cloudresourcemanager/v1beta1)
+*  [Admin SDK](https://console.developers.google.com/apis/api/admin.googleapis.com/overview)]
 
 ## Install JanusGraph
 
