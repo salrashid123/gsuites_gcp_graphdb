@@ -34,22 +34,24 @@ import (
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"golang.org/x/time/rate"
 	admin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/cloudresourcemanager/v1"
-	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iam/v1"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 )
 
 var (
-	wg  sync.WaitGroup
-	wg2 sync.WaitGroup
+	wg     sync.WaitGroup
+	wg2    sync.WaitGroup
+	cmutex = &sync.Mutex{}
 
 	component          = flag.String("component", "all", "component to load: choices, all|projectIAM|users|serviceaccounts|roles|groups")
 	serviceAccountFile = flag.String("serviceAccountFile", "svc_account.json", "Servie Account JSON file with IAM permissions to the org")
 	subject            = flag.String("subject", "admin@esodemoapp2.com", "Admin user to for the organization")
-	cx                 = flag.String("cx", "C023zw3x8", "Customer ID number for the Gsuites domain")
+	organization       = flag.String("organization", "", "OrganizationID")
+	cx                 = flag.String("cx", "", "Customer ID number for the Gsuites domain")
 	delay              = flag.Int("delay", 100, "delay in ms for each goroutine")
 	includePermissions = flag.Bool("includePermissions", false, "Include Permissions in Graph")
 
@@ -58,6 +60,12 @@ var (
 	crmService   *cloudresourcemanager.Service
 
 	projects = make([]*cloudresourcemanager.Project, 0)
+
+	permissions = &Permissions{}
+	roles       = &Roles{}
+
+	limiter *rate.Limiter
+	ors     *iam.RolesService
 
 	projectsConfig = "projects.groovy"
 	pmutex         = &sync.Mutex{}
@@ -89,8 +97,29 @@ var (
 )
 
 const (
-	maxPermissions = 100
+	maxRequestsPerSecond float64 = 4 // "golang.org/x/time/rate" limiter to throttle operations
+	burst                int     = 4
 )
+
+type Roles struct {
+	Roles []Role `json:"roles"`
+}
+
+type Role struct {
+	Name                string   `json:"name"`
+	Role                iam.Role `json:"role"`
+	IncludedPermissions []string `json:"included_permissions"`
+}
+
+type Permissions struct {
+	Permissions []Permission `json:"permissions"`
+}
+
+type Permission struct {
+	//Permission iam.Permission // there's no direct way to query a given permission detail!
+	Name  string   `json:"name"`
+	Roles []string `json:"roles"`
+}
 
 func applyGroovy(cmd string, srcFile string) {
 
@@ -174,10 +203,10 @@ func getUsers(ctx context.Context) {
 		for _, u := range r.Users {
 			glog.V(4).Infoln("            Adding User: ", u.PrimaryEmail)
 			entry := `	
-			if (g.V().hasLabel('user').has('email','%s').hasNext() == false) {	  
-			  g.addV('user').property(label, 'user').property('email', '%s').property('isExternal', false).id().next()
-			}
-			`
+if (g.V().hasLabel('user').has('email','%s').hasNext() == false) {
+ g.addV('user').property(label, 'user').property('email', '%s').property('isExternal', false).id().next()
+}
+`
 			entry = fmt.Sprintf(entry, u.PrimaryEmail, u.PrimaryEmail)
 			applyGroovy(entry, usersConfig)
 		}
@@ -208,10 +237,10 @@ func getGroups(ctx context.Context) {
 		for _, g := range r.Groups {
 			glog.V(4).Infoln("            Adding Group: ", g.Email)
 			entry := `	
-			if (g.V().hasLabel('group').has('email','%s').hasNext() == false) {				  		  
-			  g.addV('group').property(label, 'group').property('email', '%s').property('isExternal', false).id().next()
-			}
-			`
+if (g.V().hasLabel('group').has('email','%s').hasNext() == false) {	  		  
+ g.addV('group').property(label, 'group').property('email', '%s').property('isExternal', false).id().next()
+}
+`
 			entry = fmt.Sprintf(entry, g.Email, g.Email)
 			applyGroovy(entry, groupsConfig)
 
@@ -271,26 +300,27 @@ func getGroupMembers(ctx context.Context, memberKey string) {
 			glog.V(4).Infof("            Adding Member to Group %v : %v", memberKey, m.Email)
 			if m.Type == "CUSTOMER" {
 				entry := `
-				if (g.V().hasLabel('group').has('email','%s').hasNext() == false) {
-					g1 = g.V().hasLabel('group').has('email', '%s').next()
-					e1 = g.V().addE('in').to(g1).property('weight', 1).next()
-				}
-				`
+if (g.V().hasLabel('group').has('email','%s').hasNext() == false) {
+ g1 = g.V().hasLabel('group').has('email', '%s').next()
+ e1 = g.V().addE('in').to(g1).property('weight', 1).next()
+}
+`
 				entry = fmt.Sprintf(entry, memberKey, memberKey)
 				applyGroovy(entry, groupsConfig)
 			}
 			if m.Type == "USER" {
 				entry := `
-				if (g.V().hasLabel('user').has('email', '%s').hasNext() == false) {
-					g.addV('user').property(label, 'user').property('email', '%s').next()					
-				}
-				u1 = g.V().hasLabel('user').has('email', '%s' ).next()
-				g1 = g.V().hasLabel('group').has('email', '%s').next()
+if (g.V().hasLabel('user').has('email', '%s').hasNext() == false) {
+ g.addV('user').property(label, 'user').property('email', '%s').next()			
+}
 
-				if ( g.V(u1).outE('in').where(inV().hasId( g1.id() )).hasNext() == false) {
-					e1 = g.V(u1).addE('in').to(g1).property('weight', 1).next()
-				}
-				`
+u1 = g.V().hasLabel('user').has('email', '%s' ).next()
+g1 = g.V().hasLabel('group').has('email', '%s').next()
+
+if ( g.V(u1).outE('in').where(inV().hasId( g1.id() )).hasNext() == false) {
+ e1 = g.V(u1).addE('in').to(g1).property('weight', 1).next()
+}
+`
 				entry = fmt.Sprintf(entry, m.Email, m.Email, m.Email, memberKey)
 				applyGroovy(entry, groupsConfig)
 
@@ -299,16 +329,17 @@ func getGroupMembers(ctx context.Context, memberKey string) {
 				wg2.Add(1)
 
 				entry := `
-				if (g.V().hasLabel('group').has('email', '%s' ).hasNext() == false) {				  		  
-					g.V().hasLabel('group').has('email', '%s' ).next()
-				}
-				g1 = g.V().hasLabel('group').has('email', '%s' ).next()				
-				g2 = g.V().hasLabel('group').has('email', '%s').next()
+if (g.V().hasLabel('group').has('email', '%s' ).hasNext() == false) {		  		  
+ g.V().hasLabel('group').has('email', '%s' ).next()
+}
 
-				if (  g.V(g1).outE('in').where(inV().hasId( g2.id() )).hasNext() == false) {
-					e1 = g.V(g1).addE('in').to(g2).property('weight', 1).next()	
-				}
-				`
+g1 = g.V().hasLabel('group').has('email', '%s' ).next()
+g2 = g.V().hasLabel('group').has('email', '%s').next()
+
+if (  g.V(g1).outE('in').where(inV().hasId( g2.id() )).hasNext() == false) {
+ e1 = g.V(g1).addE('in').to(g2).property('weight', 1).next()
+}
+`
 				entry = fmt.Sprintf(entry, m.Email, m.Email, m.Email, memberKey)
 				applyGroovy(entry, groupsConfig)
 
@@ -335,10 +366,10 @@ func getProjectServiceAccounts(ctx context.Context) {
 			for _, sa := range page.Accounts {
 				glog.V(4).Infof("            Adding ServiceAccount: %v", sa.Email)
 				entry := `
-							if (g.V().hasLabel('serviceAccount').has('email','%s').hasNext() == false) {
-								g.addV('serviceAccount').property(label, 'serviceAccount').property('email', '%s').id().next()
-							}
-							`
+if (g.V().hasLabel('serviceAccount').has('email','%s').hasNext() == false) {
+ g.addV('serviceAccount').property(label, 'serviceAccount').property('email', '%s').id().next()
+}
+`
 				entry = fmt.Sprintf(entry, sa.Email, sa.Email)
 				applyGroovy(entry, serviceAccountConfig)
 				time.Sleep(time.Duration(*delay) * time.Millisecond)
@@ -381,20 +412,23 @@ func getGCS(ctx context.Context) {
 				}
 				glog.V(4).Infof("            Adding Bucket %v from Project %v", b.Name, projectId)
 				entry := `
-				if (g.V().hasLabel('bucket').has('bucketname','%s').has('projectid','%s').hasNext() == false) {
-					g.addV('bucket').property(label, 'bucket').property('bucketname', '%s').property('projectid','%s').id().next()
-				}
-				r1 = g.V().hasLabel('bucket').has('bucketname','%s').has('projectid','%s').next()
-				if ( g.V().hasLabel('project').has('projectid', '%s').hasNext()  == false) {
-					g.addV('project').property(label, 'project').property('projectid', '%s').id().next()
-				}
-				p1 = g.V().hasLabel('project').has('projectid', '%s').next()
-				if (g.V(r1).outE('in').where(inV().hasId( p1.id() )).hasNext() == false) {						
-					e1 = g.V(r1).addE('in').to(p1).property('weight', 1).next()	
-				}						
-				`
+if (g.V().hasLabel('bucket').has('bucketname','%s').has('projectid','%s').hasNext() == false) {
+ g.addV('bucket').property(label, 'bucket').property('bucketname', '%s').property('projectid','%s').id().next()
+}
+r1 = g.V().hasLabel('bucket').has('bucketname','%s').has('projectid','%s').next()
+
+if ( g.V().hasLabel('project').has('projectid', '%s').hasNext()  == false) {
+ g.addV('project').property(label, 'project').property('projectid', '%s').id().next()
+}
+
+p1 = g.V().hasLabel('project').has('projectid', '%s').next()
+
+if (g.V(r1).outE('in').where(inV().hasId( p1.id() )).hasNext() == false) {				
+ e1 = g.V(r1).addE('in').to(p1).property('weight', 1).next()
+}
+`
 				entry = fmt.Sprintf(entry, b.Name, projectId, b.Name, projectId, b.Name, projectId, projectId, projectId, projectId)
-				rs := iam.NewRolesService(iamService)
+
 				policy, err := client.Bucket(b.Name).IAM().Policy(ctx)
 				if err != nil {
 					glog.Infof("Unable to iterate bucket policy %s", b.Name)
@@ -403,53 +437,24 @@ func getGCS(ctx context.Context) {
 						//glog.Infof("        Role  %q", role)
 						glog.V(4).Infof("            Adding Role %v to Bucket %v", role, b.Name)
 
-						permissions := ""
-
-						if *includePermissions {
-							glog.V(4).Infof("            Getting GCS Permissions for Role %v from Project %v", role, projectId)
-							rc, err := rs.Get(string(role)).Do()
-							if err != nil {
-								if ee, ok := err.(*googleapi.Error); ok {
-									if ee.Code == 404 {
-										glog.V(4).Infof("            Ignoring 404 Error for  %v", role, projectId)
-									} else {
-										glog.Fatal(err)
-									}
-								}
-
-							} else {
-								permissions := ""
-								counter := 0
-								for _, perm := range rc.IncludedPermissions {
-									if counter > maxPermissions {
-										break
-									}
-									counter++
-
-									permissions = permissions + fmt.Sprintf(" v.property('permissions', '%s');", perm)
-								}
-							}
-						}
 						roleentry := `
-									if (g.V().hasLabel('role').has('rolename','%s').has('projectid','%s').hasNext() == false) {
+if (g.V().hasLabel('role').has('name','%s').hasNext() == false) {
+ v = graph.addVertex('role')
+}
 
-										v = graph.addVertex('role')
-										v.property('rolename', '%s')
-										v.property('projectid', '%s')
+r1 = g.V().hasLabel('role').has('name', '%s').next()
 
+if ( g.V().hasLabel('bucket').has('bucketname', '%s').hasNext()  == false) {
+ g.addV('bucket').property(label, 'bucket').property('bucketname', '%s').property('projectid',%s).id().next()
+}
 
-										%s
-									}
-									r1 = g.V().hasLabel('role').has('rolename', '%s').has('projectid','%s').next()
-									if ( g.V().hasLabel('bucket').has('bucketname', '%s').hasNext()  == false) {
-										g.addV('bucket').property(label, 'bucket').property('bucketname', '%s').property('projectid','%s').id().next()
-									}
-									p1 = g.V().hasLabel('bucket').has('bucketname', '%s').next()
-									if (g.V(r1).outE('in').where(inV().hasId( p1.id() )).hasNext() == false) {						
-										e1 = g.V(r1).addE('in').to(p1).property('weight', 1).next()	
-									}									
-									`
-						roleentry = fmt.Sprintf(roleentry, role, projectId, role, projectId, permissions, role, projectId, b.Name, b.Name, projectId, b.Name)
+p1 = g.V().hasLabel('bucket').has('bucketname', '%s').next()
+
+if (g.V(r1).outE('in').where(inV().hasId( p1.id() )).hasNext() == false) {			
+ e1 = g.V(r1).addE('in').to(p1).property('weight', 1).next()
+}
+`
+						roleentry = fmt.Sprintf(roleentry, role, role, role, b.Name, b.Name, projectId, b.Name)
 						memberentry := ``
 
 						for _, member := range policy.Members(role) {
@@ -461,17 +466,19 @@ func getGCS(ctx context.Context) {
 									memberType := "group"
 									email := member
 									memberentry = memberentry + `
-												if (g.V().hasLabel('%s').has('email', '%s').hasNext()  == false) {
-													g.addV('%s').property(label, '%s').property('email', '%s').id().next()
-												}
-												i1 = g.V().hasLabel('%s').has('email', '%s').next()
-												r1 = g.V().hasLabel('role').has('rolename', '%s').has('projectid', '%s').next()
-												if (g.V(i1).outE('in').where(inV().hasId(r1.id())).hasNext()  == false) {
-													e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
-												}
-												`
+if (g.V().hasLabel('%s').has('email', '%s').hasNext()  == false) {
+ g.addV('%s').property(label, '%s').property('email', '%s').id().next()
+}
 
-									memberentry = fmt.Sprintf(memberentry, memberType, email, memberType, memberType, email, memberType, email, role, projectId)
+i1 = g.V().hasLabel('%s').has('email', '%s').next()
+r1 = g.V().hasLabel('role').has('name', '%s').next()
+
+if (g.V(i1).outE('in').where(inV().hasId(r1.id())).hasNext()  == false) {
+ e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
+}
+`
+
+									memberentry = fmt.Sprintf(memberentry, memberType, email, memberType, memberType, email, memberType, email, role)
 									break
 
 								} else {
@@ -483,18 +490,20 @@ func getGCS(ctx context.Context) {
 							memberType := strings.Split(member, ":")[0]
 							email := strings.Split(member, ":")[1]
 							glog.V(4).Infof("            Adding Member %v to Bucket Role %v on Bucket %v", email, role, b.Name)
-							memberentry = memberentry + `																				
-										if (g.V().hasLabel('%s').has('email', '%s').hasNext()  == false) {
-											g.addV('%s').property(label, '%s').property('email', '%s').id().next()
-										}
-										i1 = g.V().hasLabel('%s').has('email', '%s').next()
-										r1 = g.V().hasLabel('role').has('rolename', '%s').has('projectid', '%s').next()			
-										if (g.V(i1).outE('in').where(inV().hasId(r1.id())).hasNext()  == false) {
-											e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
-										}
-										`
+							memberentry = memberentry + `																		
+if (g.V().hasLabel('%s').has('email', '%s').hasNext()  == false) {
+ g.addV('%s').property(label, '%s').property('email', '%s').id().next()
+}
 
-							memberentry = fmt.Sprintf(memberentry, memberType, email, memberType, memberType, email, memberType, email, role, projectId)
+i1 = g.V().hasLabel('%s').has('email', '%s').next()
+r1 = g.V().hasLabel('role').has('name', '%s').next()
+
+if (g.V(i1).outE('in').where(inV().hasId(r1.id())).hasNext()  == false) {
+ e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
+}
+`
+
+							memberentry = fmt.Sprintf(memberentry, memberType, email, memberType, memberType, email, memberType, email, role)
 
 						}
 						entry = entry + roleentry + memberentry
@@ -508,69 +517,6 @@ func getGCS(ctx context.Context) {
 	}
 }
 
-func getRoles(ctx context.Context) {
-	defer wg.Done()
-	glog.V(2).Infoln(">>>>>>>>>>> Getting Roles")
-
-	req := crmService.Projects.List()
-	if err := req.Pages(ctx, func(page *cloudresourcemanager.ListProjectsResponse) error {
-		for _, project := range page.Projects {
-
-			rs := iam.NewRolesService(iamService)
-
-			if project.LifecycleState == "ACTIVE" {
-				time.Sleep(time.Duration(*delay) * time.Millisecond)
-				wg.Add(1)
-				go func(ctx context.Context, projectId string) {
-					defer wg.Done()
-					req := iamService.Projects.Roles.List("projects/" + projectId)
-					if err := req.Pages(ctx, func(page *iam.ListRolesResponse) error {
-						for _, r := range page.Roles {
-
-							permissions := ""
-							if *includePermissions {
-								glog.V(4).Infof("            Getting Permissions for Role %v from Project %v", r.Name, projectId)
-								rc, err := rs.Get(r.Name).Do()
-								if err != nil {
-									glog.Fatal(err)
-								}
-
-								counter := 0
-								for _, perm := range rc.IncludedPermissions {
-									if counter > maxPermissions {
-										break
-									}
-									counter++
-									permissions = permissions + fmt.Sprintf(" v.property('permissions', '%s');", perm)
-								}
-							}
-							entry := `
-										if (g.V().hasLabel('role').has('rolename','%s').has('projectid','%s').hasNext() == false) {
-											v = graph.addVertex('role')
-											v.property('rolename', '%s')
-											v.property('projectid', '%s')
-	
-
-											%s
-										}
-										`
-							entry = fmt.Sprintf(entry, r.Name, projectId, r.Name, projectId, permissions)
-							applyGroovy(entry, rolesConfig)
-
-						}
-						return nil
-					}); err != nil {
-						glog.Fatal(err)
-					}
-				}(ctx, project.ProjectId)
-			}
-		}
-		return nil
-	}); err != nil {
-		glog.Fatal(err)
-	}
-}
-
 func getIamPolicy(ctx context.Context, projectID string) {
 	defer wg.Done()
 	glog.V(2).Infof(">>>>>>>>>>> Getting IAMPolicy for Project %v", projectID)
@@ -580,46 +526,31 @@ func getIamPolicy(ctx context.Context, projectID string) {
 	if err != nil {
 		glog.Fatal(err)
 	}
-	rs := iam.NewRolesService(iamService)
+	//	rs := iam.NewRolesService(iamService)
 	for _, b := range resp.Bindings {
 		glog.V(4).Infof("            Adding Binding %v to from  Project %v", b.Role, projectID)
-		permissions := ""
-		if *includePermissions {
-			glog.V(4).Infof("            Getting Permissions for Role %v from Project %v", b.Role, projectID)
-			rc, err := rs.Get(b.Role).Do()
-			if err != nil {
-				glog.Fatal(err)
-			}
 
-			counter := 0
-			for _, perm := range rc.IncludedPermissions {
-				if counter > maxPermissions {
-					break
-				}
-				counter++
-
-				permissions = permissions + fmt.Sprintf(" v.property('permissions', '%s');", perm)
-			}
-		}
 		entry := `
-		if (g.V().hasLabel('role').has('rolename', '%s').has('projectid', '%s').hasNext()  == false) {
+if (g.V().hasLabel('role').has('name', '%s').hasNext()  == false) {
 
-			v = graph.addVertex('role')
-			v.property('rolename', '%s')
-			v.property('projectid', '%s')
+ v = graph.addVertex('role')
+ v.property('name', '%s')
 
-			%s
-		}
-		r1 = g.V().hasLabel('role').has('rolename', '%s').has('projectid', '%s').next()
-		if ( g.V().hasLabel('project').has('projectid', '%s').hasNext()  == false) {
-			g.addV('project').property(label, 'project').property('projectid', '%s').id().next()
-		}
-		p1 = g.V().hasLabel('project').has('projectid', '%s').next()
-		if (g.V(r1).outE('in').where(inV().hasId( p1.id() )).hasNext() == false) {						
-			e1 = g.V(r1).addE('in').to(p1).property('weight', 1).next()	
-		}
-		`
-		entry = fmt.Sprintf(entry, b.Role, projectID, b.Role, projectID, permissions, b.Role, projectID, projectID, projectID, projectID)
+}
+
+r1 = g.V().hasLabel('role').has('name', '%s').next()
+
+if ( g.V().hasLabel('project').has('projectid', '%s').hasNext()  == false) {
+ g.addV('project').property(label, 'project').property('projectid', '%s').id().next()
+}
+
+p1 = g.V().hasLabel('project').has('projectid', '%s').next()
+
+if (g.V(r1).outE('in').where(inV().hasId( p1.id() )).hasNext() == false) {				
+ e1 = g.V(r1).addE('in').to(p1).property('weight', 1).next()
+}
+`
+		entry = fmt.Sprintf(entry, b.Role, b.Role, b.Role, projectID, projectID, projectID)
 		applyGroovy(entry, iamConfig)
 
 		for _, m := range b.Members {
@@ -629,63 +560,141 @@ func getIamPolicy(ctx context.Context, projectID string) {
 			if memberType == "user" {
 
 				entry := `
-			if (g.V().hasLabel('user').has('email', '%s').hasNext()  == false) {
-				g.addV('user').property(label, 'user').property('email', '%s').id().next()
-			}
-			i1 = g.V().hasLabel('user').has('email', '%s').next()
-			r1 = g.V().hasLabel('role').has('rolename', '%s').has('projectid', '%s').next()			
-			if (g.V(i1).outE('in').where(inV().hasId(r1.id())).hasNext()  == false) {
-				e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
-			}
-			`
-				entry = fmt.Sprintf(entry, email, email, email, b.Role, projectID)
+if (g.V().hasLabel('user').has('email', '%s').hasNext()  == false) {
+ g.addV('user').property(label, 'user').property('email', '%s').id().next()
+}
+
+i1 = g.V().hasLabel('user').has('email', '%s').next()
+r1 = g.V().hasLabel('role').has('name', '%s').next()
+
+if (g.V(i1).outE('in').where(inV().hasId(r1.id())).hasNext()  == false) {
+ e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
+}
+`
+				entry = fmt.Sprintf(entry, email, email, email, b.Role)
 				applyGroovy(entry, iamConfig)
 			}
 
 			if memberType == "serviceAccount" {
 
 				entry := `
-				if (g.V().hasLabel('serviceAccount').has('serviceAccount', '%s').hasNext()  == false) {
-					g.addV('serviceAccount').property(label, 'serviceAccount').property('email', '%s').id().next()
-				}
-				i1 = g.V().hasLabel('serviceAccount').has('email', '%s').next()
-				r1 = g.V().hasLabel('role').has('rolename', '%s').has('projectid', '%s').next()			
-				if (g.V(i1).outE('in').where(inV().hasId(r1.id())).hasNext()  == false) {
-					e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
-				}
-				`
-				entry = fmt.Sprintf(entry, email, email, email, b.Role, projectID)
+if (g.V().hasLabel('serviceAccount').has('serviceAccount', '%s').hasNext()  == false) {
+ g.addV('serviceAccount').property(label, 'serviceAccount').property('email', '%s').id().next()
+}
+
+i1 = g.V().hasLabel('serviceAccount').has('email', '%s').next()
+r1 = g.V().hasLabel('role').has('name', '%s').next()
+
+if (g.V(i1).outE('in').where(inV().hasId(r1.id())).hasNext()  == false) {
+ e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
+}
+`
+				entry = fmt.Sprintf(entry, email, email, email, b.Role)
 				applyGroovy(entry, iamConfig)
 			}
 
 			if memberType == "group" {
 				entry := `
-			if (g.V().hasLabel('group').has('email', '%s').hasNext()  == false) {
-				g.addV('group').property(label, 'group').property('email', '%s').id().next()
-			}
-			i1 = g.V().hasLabel('group').has('email', '%s').next()
-			r1 = g.V().hasLabel('role').has('rolename', '%s').has('projectid', '%s').next()			
-			if (g.V(i1).outE('in').where(inV().hasId(r1.id())).hasNext()  == false) {
-				e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
-			}
-			`
-				entry = fmt.Sprintf(entry, email, email, email, b.Role, projectID)
+if (g.V().hasLabel('group').has('email', '%s').hasNext()  == false) {
+ g.addV('group').property(label, 'group').property('email', '%s').id().next()
+}
+i1 = g.V().hasLabel('group').has('email', '%s').next()
+r1 = g.V().hasLabel('role').has('name', '%s').next()			
+if (g.V(i1).outE('in').where(inV().hasId(r1.id())).hasNext()  == false) {
+ e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
+}
+`
+				entry = fmt.Sprintf(entry, email, email, email, b.Role)
 				applyGroovy(entry, iamConfig)
 			}
 		}
 	}
 }
 
-func getProjectIAM(ctx context.Context) {
+func getIAM(ctx context.Context) {
 
 	defer wg.Done()
+	// oreq, err := crmService.Organizations.Get(fmt.Sprintf("organizations/%s", *organization)).Do()
+	// if err != nil {
+	// 	glog.Fatal(err)
+	// }
+	// glog.V(2).Infof("     Organization Name %s", oreq.Name)
+	// *organization = oreq.Name
+
+	parent := fmt.Sprintf(fmt.Sprintf("organizations/%s", *organization))
+	err := generateMap(ctx, parent)
+	if err != nil {
+		glog.Fatal(err)
+	}
+	for _, p := range projects {
+		parent := fmt.Sprintf("projects/%s", p.ProjectId)
+		err = generateMap(ctx, parent)
+		if err != nil {
+			glog.Fatal(err)
+		}
+	}
+	parent = ""
+	err = generateMap(ctx, parent)
+	if err != nil {
+		glog.Fatal(err)
+	}
+
+	for _, r := range roles.Roles {
+		entry := `
+if (g.V().hasLabel('role').has('name', '%s').hasNext()  == false) {		
+  g.addV('role').property(label, 'role').property('name', '%s').id().next()
+}
+`
+		entry = fmt.Sprintf(entry, r.Name, r.Name)
+		applyGroovy(entry, rolesConfig)
+	}
+	if *includePermissions {
+		for _, p := range permissions.Permissions {
+
+			pp := `
+i1 = g.V().hasLabel('permission').has('name', '%s').next()
+		`
+			pp = fmt.Sprintf(pp, p.Name)
+			rentry := ""
+
+			for _, r := range p.Roles {
+				rentry = rentry + `
+if (g.V().hasLabel('role').has('name', '%s').hasNext()  == false) {
+  g.addV('role').property(label, 'role').property('name', '%s').id().next()
+}
+r1 = g.V().hasLabel('role').has('name', '%s').next()
+e1 = g.V(i1).addE('in').to(r1).property('weight', 1).next()
+`
+				rentry = fmt.Sprintf(rentry, r, r, r)
+			}
+
+			entry := `
+if (g.V().hasLabel('permission').has('permission', '%s').hasNext()  == false) {
+  g.addV('permission').property(label, 'permission').property('name', '%s').id().next()
+}
+
+%s
+
+%s
+`
+			entry = fmt.Sprintf(entry, p.Name, p.Name, pp, rentry)
+			applyGroovy(entry, rolesConfig)
+		}
+	}
+	// glog.V(2).Infof("Getting Default Roles/Permissions")
+	// parent = ""
+	// err = generateMap(ctx, parent)
+	// if err != nil {
+	// 	glog.Fatal(err)
+	// }
+
 	glog.V(2).Infof(">>>>>>>>>>> Getting ProjectIAM")
 	for _, p := range projects {
 		entry := `
-			if (g.V().hasLabel('project').has('projectId', '%s').hasNext() == false) {
-				g.addV('project').property(label, 'project').property('projectId', '%s').id().next()
-			}
-		`
+if (g.V().hasLabel('project').has('projectId', '%s').hasNext() == false) {
+  g.addV('project').property(label, 'project').property('projectId', '%s').id().next()
+}
+`
 		entry = fmt.Sprintf(entry, p.ProjectId, p.ProjectId)
 		applyGroovy(entry, projectsConfig)
 		// only active projects appear to allow retrieval of IAM policies
@@ -697,6 +706,8 @@ func getProjectIAM(ctx context.Context) {
 	}
 }
 
+// TODO: only get projects in the selected organization
+//       the following get allprojects the service account has access to...
 func getProjects(ctx context.Context) {
 	glog.V(2).Infof(">>>>>>>>>>> Getting Projects")
 	req := crmService.Projects.List()
@@ -715,6 +726,10 @@ func getProjects(ctx context.Context) {
 func main() {
 	ctx := context.Background()
 	flag.Parse()
+	limiter = rate.NewLimiter(rate.Limit(maxRequestsPerSecond), burst)
+	if *organization == "" || *cx == "" {
+		glog.Fatal("--organization and --cx must be specified")
+	}
 
 	data, err := ioutil.ReadFile(*serviceAccountFile)
 	if err != nil {
@@ -741,6 +756,7 @@ func main() {
 	if err != nil {
 		glog.Fatal(err)
 	}
+	ors = iam.NewRolesService(iamService)
 
 	crmconf, err := google.JWTConfigFromJSON(data, cloudresourcemanager.CloudPlatformReadOnlyScope)
 	if err != nil {
@@ -756,13 +772,15 @@ func main() {
 	getProjects(ctx)
 
 	switch *component {
-	case "projectIAM":
+	case "IAM":
 		pfile, _ = os.Create(projectsConfig)
 		ifile, _ = os.Create(iamConfig)
+		rfile, _ = os.Create(rolesConfig)
 		defer pfile.Close()
 		defer ifile.Close()
+		defer rfile.Close()
 		wg.Add(1)
-		go getProjectIAM(ctx)
+		go getIAM(ctx)
 	case "users":
 		ufile, _ = os.Create(usersConfig)
 		defer ufile.Close()
@@ -777,11 +795,6 @@ func main() {
 		sfile, _ = os.Create(serviceAccountConfig)
 		defer sfile.Close()
 		go getProjectServiceAccounts(ctx)
-	case "roles":
-		rfile, _ = os.Create(rolesConfig)
-		defer rfile.Close()
-		wg.Add(1)
-		go getRoles(ctx)
 	case "gcs":
 		gcsfile, _ = os.Create(gcsConfig)
 		defer gcsfile.Close()
@@ -806,14 +819,110 @@ func main() {
 		defer gfile.Close()
 		defer gcsfile.Close()
 
-		wg.Add(6)
+		wg.Add(5)
 		go getUsers(ctx)
 		go getGroups(ctx)
 		go getProjectServiceAccounts(ctx)
-		go getRoles(ctx)
-		go getProjectIAM(ctx)
+		go getIAM(ctx)
 		go getGCS(ctx)
 	}
 	wg.Wait()
 
+}
+
+func generateMap(ctx context.Context, parent string) error {
+	var wg sync.WaitGroup
+
+	oireq := ors.List().Parent(parent)
+	if err := oireq.Pages(ctx, func(page *iam.ListRolesResponse) error {
+		for _, sa := range page.Roles {
+			wg.Add(1)
+			go func(ctx context.Context, wg *sync.WaitGroup, sa *iam.Role) {
+				glog.V(20).Infof("%s\n", sa.Name)
+				defer wg.Done()
+				var err error
+				if err := limiter.Wait(ctx); err != nil {
+					glog.Fatal(err)
+				}
+				if ctx.Err() != nil {
+					glog.Fatal(err)
+				}
+				rc, err := ors.Get(sa.Name).Do()
+				if err != nil {
+					glog.Fatal(err)
+				}
+				cr := &Role{
+					Name:                sa.Name,
+					Role:                *sa,
+					IncludedPermissions: rc.IncludedPermissions,
+				}
+				cmutex.Lock()
+				_, ok := findRoles(roles.Roles, sa.Name)
+				if !ok {
+					glog.V(2).Infof("     Iterating Role  %s", sa.Name)
+					roles.Roles = append(roles.Roles, *cr)
+				}
+				cmutex.Unlock()
+
+				for _, perm := range rc.IncludedPermissions {
+					glog.V(2).Infof("     Appending Permission %s to Role %s", perm, sa.Name)
+					i, ok := findPermission(permissions.Permissions, perm)
+
+					if !ok {
+						pmutex.Lock()
+						permissions.Permissions = append(permissions.Permissions, Permission{
+							Name:  perm,
+							Roles: []string{sa.Name},
+						})
+						pmutex.Unlock()
+					} else {
+						pmutex.Lock()
+						p := permissions.Permissions[i]
+						_, ok := find(p.Roles, sa.Name)
+						if !ok {
+							p.Roles = append(p.Roles, sa.Name)
+							permissions.Permissions[i] = p
+						}
+						pmutex.Unlock()
+					}
+
+				}
+			}(ctx, &wg, sa)
+
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	wg.Wait()
+
+	return nil
+}
+
+func find(slice []string, val string) (int, bool) {
+	for i, item := range slice {
+		if item == val {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+func findRoles(slice []Role, val string) (int, bool) {
+	for i, item := range slice {
+		if item.Name == val {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+func findPermission(slice []Permission, val string) (int, bool) {
+	for i, item := range slice {
+		if item.Name == val {
+			return i, true
+		}
+	}
+	return -1, false
 }

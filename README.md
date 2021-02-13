@@ -35,6 +35,7 @@ user vertex `user1@`
    
    It would be useful to add the IAM permissions as multi-valued properties to each "Role" node
    However, as of `2/5/21`, there are some issues i've come across in doing this that i've detailed at the end of the doc.
+   Instead, as of `2/13/21`, i've just added the permission<->role maps in directly.  This takes a LONG time to generate
 
 
 - ![images/cytoscape_annotation.png](images/cytoscape_annotation.png)
@@ -80,7 +81,7 @@ The code snippet contained there iterates projects and for each bucket in that p
 
 - Roles
 ```python
-  g.addV('role').property(label, 'role').property('rolename', name).id().next()  
+  g.addV('role').property(label, 'role').property('name', name).id().next()  
 ```
 
 
@@ -206,11 +207,7 @@ gremlin>
 
 At this point, local scripts on local will get sent to the running gremlin server
 
-
-
 ## Configure and Run ETL script
-
-
 
 - `serviceAccountFile`: path to the service account file
 - `subject`:  the email/identity of a gsuites domain admin to represent
@@ -224,8 +221,13 @@ go run main.go \
   --subject=admin@esodemoapp2.com \
   --component=all \
   --cx=C023zw3x8 \
+  --organization=673208786098  \
   --logtostderr=1 -v 20
 ```
+
+Note, if you want to also include a map of ALL permissions<->Roles, add the flag `--includePermissions`.  
+ >> This setting will take a long to complete and will significantly increase the size of the graph.
+
 
 >>  NOTE: this utility will only sync ACTIVE projects
 
@@ -249,23 +251,37 @@ If you want to iterate only a subcomponent, use the `--component` flag.   For ex
 The output of this run will generate several raw groovy files:
 
 - `users.groovy`:  users to add to the map
-- `groups.groovy`:  groups and groupmembers to add
+- `groups.groovy`:  groups and group members to add
 - `projects.groovy`:  list of the projects to add to the graph
-- `roles.groovy`:  Custom and possibly generic roles to add
+- `roles.groovy`:  Roles and Permissions
 - `serviceaccounts.groovy`:  list of the service ac
 - `iam.groovy`:  IAM policy maps.
 
 
-Note, `init.groovy` generates the index and properties (used primarily to add permissions to roles):
+Note, `init.groovy` generates the index, schema, properties incase you need to define them.  At the moment the config defines a no-op property
 
 ```groovy
 mgmt = graph.openManagement()
-p = mgmt.getPropertyKey("permissions")
+p = mgmt.getPropertyKey("noop")
 if (p == null) {
-    mgmt.makePropertyKey('permissions').dataType(String.class).cardinality(org.janusgraph.core.Cardinality.LIST).make()
+    mgmt.makePropertyKey('noop').dataType(String.class).cardinality(org.janusgraph.core.Cardinality.LIST).make()
     mgmt.commit()
 }
+p = mgmt.getPropertyKey('noop')
+graph.tx().rollback()
+
+if (m.getGraphIndex('byNoopComposite') == false) {
+   mgmt = graph.openManagement()
+   mgmt.buildIndex('byNoopComposite', Vertex.class).addKey(p).buildCompositeIndex()
+   mgmt.commit()
+   // ManagementSystem.awaitGraphIndexStatus(graph, 'byNoopComposite').call()
+}
 ```
+
+Use the init.groovy file to define properties, verticies, constraints and index values
+
+- [JanusGraph Schema](https://docs.janusgraph.org/basics/schema/)
+- [JanusGraph Index](https://docs.janusgraph.org/index-management/index-performance/#graph-index)
 
 Combine all the files:
 
@@ -281,7 +297,9 @@ in the gremlin console, run
 gremlin> :load  /path/to/all.groovy
 ```
 
-if its all configured, you should see an output displaying the vertices and edges that were created.
+Note, if you enabled `--includePermissions`, this load may take upto an hour+, right.  Even if not, it may take sometime (like an hour+)...you'll see progress though...get a coffee.
+
+if its all configured, you should see an output displaying the vertices and edges that were created.  (see section below about visualizing the graph)
 
 
 ## References
@@ -312,12 +330,6 @@ g.E().drop().iterate()
 
 Sample query to retrieve a user and its edges:
 
-* VertexID for a user:
-```bash
-gremlin> u1 = g.V().has("uid", "user1@esodemoapp2.com")
-==>v[2842792]
-```
-
 * Outbound Edges from a Vertex:
 ```
 gremlin> g.V().hasLabel('user').has('email', 'user1@esodemoapp2.com').outE()
@@ -341,6 +353,63 @@ gremlin> g.V().hasLabel('user').has('email', 'user1@esodemoapp2.com').out().valu
 There are several ways to visualize the generated graph:
 
 
+#### Neo4J and OrientDB
+
+I havne't tried it but you should be able to export the graph to `GraphML` and then import into Neo4J.   See:
+
+- [Neo4J GraphML](https://neo4j.com/labs/apoc/4.1/import/graphml/)
+- [OrientDB GraphML](https://orientdb.com/docs/2.2.x/Import-from-Neo4j-using-GraphML.html)
+
+To export the graph to graphML, see the section below about CytoScape
+
+There are probably other ways to export from janusgrahph/gremlin and import...
+
+#### Cytoscape
+
+- Export graph to GraphML file:
+
+```
+gremlin> sg = g.V().outE().subgraph('sg').cap('sg').next()
+==>tinkergraph[vertices:183 edges:290]
+```
+
+If you exported the role<->permission (eg, used export `--includePermissions`), then the graph is much, much larger
+
+```
+gremlin> sg = g.V().outE().subgraph('sg').cap('sg').next()
+==>tinkergraph[vertices:4755 edges:33834]
+```
+
+Finally export the graph:
+
+```
+gremlin> sg.io(IoCore.graphml()).writeGraph("/tmp/mygraph.xml")
+==>null
+```
+
+- Import GraphML to Cytoscape
+
+on Cytoscape, ```File->Import->Network->File```,  Select ```GraphMLFile```  the ```/tmp/mygraph.xml```
+
+Upon import you should see the Cytosscape rendering:
+
+The graph below uses the defaults included in this repo which covers: users, groups, serviceAccounts, all roles, projects, GCS buckets
+
+- ![images/cytoscape.png](images/cytoscape.png)
+
+roles that are in use
+
+- ![images/cytoscape_roles.png](images/cytoscape_roles.png)
+
+However, if you used, ``--includePermissions` then the graph starts to look like the corona virus
+
+- ![images/cytoscape_permissions.png](images/cytoscape_permissions.png)
+
+If you zoom in, you can see some details after you enable the appropriate filters
+
+- ![images/cytoscape_role_permission_details.png](images/cytoscape_role_permission_details.png)
+
+(i don't know how to use cytoscape at all so thats the limit of my usability: zoom/unzoom with labels)
 #### graphexp
 
 ```
@@ -352,26 +421,7 @@ firefox index.html
 
 - ![images/graphexp.png](images/graphexp.png)
 
-
-#### Cytoscape
-
-- Export graph to GraphML file:
-```
-gremlin> sg = g.V().outE().subgraph('sg').cap('sg').next()
-==>tinkergraph[vertices:81 edges:140]
-
-gremlin> sg.io(IoCore.graphml()).writeGraph("/tmp/mygraph.xml")
-==>null
-```
-
-- Import GraphML to Cytoscape
-
-on Cytoscape, ```File->Import->Network->File```,  Select ```GraphMLFile```  the ```/tmp/mygraph.xml```
-
-Upon import you should see the Cytosscape rendering:
-
-- ![images/cytoscape.png](images/cytoscape.png)
-
+I highly doubt you can render any graph that uses `--includePermissions` using graphep...
 
 ### Gephi
 
@@ -386,48 +436,16 @@ gremlin> :remote list
 ==>*1 - Gephi - [workspace1]
 ```
 
+#### Permissions as Role Properties
 
-## Disconnected Graph
+One option that is not implemented in this branch (but is in earlier commits), is to attach the permissions to roles as properties.
 
-While Google IAM Permissions are inherited down the tree from the Org and Folder, an API scan on a resource does not show those resources explictly.  What that means is once the script executes the scan of IAM permissions on a project at the project level, it does not recognize and link parent inherited owners or roles.  What that will mean is certain projects will be 'disconnected' from the main graph as shown here.  You can remedy this by adding in the domain admin account as an explicit `OWNER`:
-
-![images/iam_visiblity.png](images/iam_visiblity.png)
-
-## Admin API
-
-
-The following is just a sampl raw JSON snippet for the various API calls made to ```directory_service```, ```IAM``` and ```Cloud Resource Manager```.
-
-
-- https://cloud.google.com/resource-manager/reference/rest/
-- https://cloud.google.com/iam/reference/rest/v1/projects.roles/list
-- https://developers.google.com/admin-sdk/directory/v1/guides/authorizing
-
-
-
-## Permissions on Roles
-
-It would be quite useful to include IAM Permissions as multi-valued attributes to Roles.  
-
-To enable this feature, generate the `.groovy` files by specifying the ``--includePermissions` flag:
-
-```bash
-go run main.go  \
-   --serviceAccountFile=/path/to/google_apps_svc_dwd.json \
-   --subject=admin@esodemoapp2.com \
-   --includePermissions \
-   --component=all \
-   --cx=C023zw3x8 \
-   --logtostderr=1 -v 4 
-```
-
-That step will enumerate the IAM Permissions on a Role.  For example, the when the `roles/appengine.appViewer` vertex is defined, all of its constituent permissions are added:
-
+For example
 ```groovy
-		if (g.V().hasLabel('role').has('rolename', 'roles/appengine.appViewer').has('projectid', 'netapp-producer').hasNext()  == false) {
+		if (g.V().hasLabel('role').has('name', 'roles/appengine.appViewer').has('projectid', 'netapp-producer').hasNext()  == false) {
 
 			v = graph.addVertex('role')
-			v.property('rolename', 'roles/appengine.appViewer')
+			v.property('name', 'roles/appengine.appViewer')
 			v.property('projectid', 'netapp-producer')
 
 			 v.property('permissions', 'appengine.applications.get'); v.property('permissions', 'appengine.instances.get'); v.property('permissions', 'appengine.instances.list'); v.property('permissions', 'appengine.operations.get'); v.property('permissions', 'appengine.operations.list'); v.property('permissions', 'appengine.ser
@@ -446,7 +464,7 @@ if (p == null) {
 }
 ```
 
-Now the issues:
+However, i ran into some issues issues:
 
 1. The current application writes the groovy files to disk and imports it via the admin gremlin CLI.
    This ofcourse isn't the right way to do this but i don't know this tech very well.
@@ -470,4 +488,5 @@ Now the issues:
     writer.writeGraph(file, sg)
 ```
 
-However, if you don't care and just want to iterate over the graph using, gremlin itself, you dn't need to export the formats
+
+So instead, i just made the permissions as their own nodes.
