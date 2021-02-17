@@ -412,10 +412,10 @@ func getGCS(ctx context.Context) {
 				}
 				glog.V(4).Infof("            Adding Bucket %v from Project %v", b.Name, projectId)
 				entry := `
-if (g.V().hasLabel('bucket').has('bucketname','%s').has('projectid','%s').hasNext() == false) {
- g.addV('bucket').property(label, 'bucket').property('bucketname', '%s').property('projectid','%s').id().next()
+if (g.V().hasLabel('bucket').has('name','%s').has('projectid','%s').hasNext() == false) {
+ g.addV('bucket').property(label, 'bucket').property('name', '%s').property('projectid','%s').id().next()
 }
-r1 = g.V().hasLabel('bucket').has('bucketname','%s').has('projectid','%s').next()
+r1 = g.V().hasLabel('bucket').has('name','%s').has('projectid','%s').next()
 
 if ( g.V().hasLabel('project').has('projectid', '%s').hasNext()  == false) {
  g.addV('project').property(label, 'project').property('projectid', '%s').id().next()
@@ -440,15 +440,16 @@ if (g.V(r1).outE('in').where(inV().hasId( p1.id() )).hasNext() == false) {
 						roleentry := `
 if (g.V().hasLabel('role').has('name','%s').hasNext() == false) {
  v = graph.addVertex('role')
+ v.property('name', '%s')
 }
 
 r1 = g.V().hasLabel('role').has('name', '%s').next()
 
-if ( g.V().hasLabel('bucket').has('bucketname', '%s').hasNext()  == false) {
- g.addV('bucket').property(label, 'bucket').property('bucketname', '%s').property('projectid',%s).id().next()
+if ( g.V().hasLabel('bucket').has('name', '%s').hasNext()  == false) {
+ g.addV('bucket').property(label, 'bucket').property('name', '%s').property('projectid',%s).id().next()
 }
 
-p1 = g.V().hasLabel('bucket').has('bucketname', '%s').next()
+p1 = g.V().hasLabel('bucket').has('name', '%s').next()
 
 if (g.V(r1).outE('in').where(inV().hasId( p1.id() )).hasNext() == false) {			
  e1 = g.V(r1).addE('in').to(p1).property('weight', 1).next()
@@ -496,6 +497,11 @@ if (g.V().hasLabel('%s').has('email', '%s').hasNext()  == false) {
 }
 
 i1 = g.V().hasLabel('%s').has('email', '%s').next()
+
+if (g.V().hasLabel('role').has('name','%s').hasNext() == false) {
+	v = graph.addVertex('role')
+}
+
 r1 = g.V().hasLabel('role').has('name', '%s').next()
 
 if (g.V(i1).outE('in').where(inV().hasId(r1.id())).hasNext()  == false) {
@@ -503,7 +509,7 @@ if (g.V(i1).outE('in').where(inV().hasId(r1.id())).hasNext()  == false) {
 }
 `
 
-							memberentry = fmt.Sprintf(memberentry, memberType, email, memberType, memberType, email, memberType, email, role)
+							memberentry = fmt.Sprintf(memberentry, memberType, email, memberType, memberType, email, memberType, email, role, role)
 
 						}
 						entry = entry + roleentry + memberentry

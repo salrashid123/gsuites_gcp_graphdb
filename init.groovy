@@ -8,7 +8,7 @@ p = mgmt.getPropertyKey('noop')
 graph.tx().rollback() //Never create new indexes while a transaction is active
 
 
-if (m.getGraphIndex('byNoopComposite') == false) {
+if (mgmt.getGraphIndex('byNoopComposite') == false) {
    mgmt = graph.openManagement()
    mgmt.buildIndex('byNoopComposite', Vertex.class).addKey(p).buildCompositeIndex()
    mgmt.commit()
